@@ -32,7 +32,7 @@ def _profile(name: str) -> dict[str, Any]:
         raise RuntimeError("Desktop automation requires the gui extra: pip install -e .[gui]") from exc
     profile = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(profile, dict):
-        raise ValueError(f"Desktop profile must be a YAML object: {path}")
+        raise TypeError(f"Desktop profile must be a YAML object: {path}")
     return profile
 
 
