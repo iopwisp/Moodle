@@ -1,4 +1,4 @@
-"""Concrete desktop and browser adapters used by the constrained workflow runner."""
+"""Concrete desktop and browser operations used by integration adapters."""
 
 from __future__ import annotations
 
@@ -16,17 +16,24 @@ from .tools.process import launch_application
 from .tools.screenshot import take_screenshot
 
 ROOT = Path(__file__).resolve().parents[2]
+PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+FORENSIC_EXTENSIONS = {".dd", ".raw", ".img", ".001", ".e01", ".vmdk", ".vhd"}
 
 
 def _profile(name: str) -> dict[str, Any]:
-    if name not in {"autopsy", "burp"}:
-        raise ValueError("Desktop profile must be autopsy or burp.")
+    if not PROFILE_NAME_RE.fullmatch(name):
+        raise ValueError(f"Invalid desktop profile name: {name!r}")
+    path = ROOT / "profiles" / f"{name}.yaml"
+    if not path.is_file():
+        raise FileNotFoundError(f"Desktop profile not found: {path}")
     try:
         import yaml
     except ImportError as exc:
         raise RuntimeError("Desktop automation requires the gui extra: pip install -e .[gui]") from exc
-    path = ROOT / "profiles" / f"{name}.yaml"
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    profile = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(profile, dict):
+        raise ValueError(f"Desktop profile must be a YAML object: {path}")
+    return profile
 
 
 def _application_path(profile: dict[str, Any]) -> str:
@@ -42,7 +49,11 @@ def desktop_operation(workspace: Path, profile_name: str, operation: str, assign
     profile = _profile(profile_name)
     operations = profile.get("operations", {})
     if operation not in operations:
-        raise ValueError(f"Operation {operation!r} is not in the {profile_name} profile.")
+        available = ", ".join(sorted(operations)) or "none"
+        raise ValueError(
+            f"Operation {operation!r} is not in the {profile_name} profile. "
+            f"Available operations: {available}."
+        )
     executable = _application_path(profile)
     process = launch_application(executable, cwd=workspace)
     time.sleep(float(profile.get("launch_wait_seconds", 3)))
@@ -86,11 +97,10 @@ def _safe_extract_archives(workspace: Path) -> list[Path]:
     destination = workspace / "working" / "autopsy_input"
     destination.mkdir(parents=True, exist_ok=True)
     found: list[Path] = []
-    extensions = {".dd", ".raw", ".img", ".001", ".e01", ".vmdk", ".vhd"}
     for archive in (workspace / "input").rglob("*.zip"):
         with zipfile.ZipFile(archive) as zf:
             for member in zf.infolist():
-                if member.is_dir() or Path(member.filename).suffix.lower() not in extensions:
+                if member.is_dir() or Path(member.filename).suffix.lower() not in FORENSIC_EXTENSIONS:
                     continue
                 target = (destination / Path(member.filename).name).resolve()
                 if not target.is_relative_to(destination.resolve()):
@@ -103,10 +113,9 @@ def _safe_extract_archives(workspace: Path) -> list[Path]:
 
 
 def _find_data_source(workspace: Path) -> Path:
-    extensions = {".dd", ".raw", ".img", ".001", ".e01", ".vmdk", ".vhd"}
     candidates = sorted(
         p for p in (workspace / "input").rglob("*")
-        if p.is_file() and p.suffix.lower() in extensions
+        if p.is_file() and p.suffix.lower() in FORENSIC_EXTENSIONS
     )
     if not candidates:
         candidates = _safe_extract_archives(workspace)
@@ -116,6 +125,20 @@ def _find_data_source(workspace: Path) -> Path:
             "Expected .dd, .raw, .img, .001, .e01, .vmdk or .vhd."
         )
     return candidates[0]
+
+
+def _resolve_data_source(workspace: Path, value: str | None) -> Path:
+    if not value:
+        return _find_data_source(workspace)
+    raw = Path(value)
+    candidate = raw.resolve() if raw.is_absolute() else (workspace / raw).resolve()
+    if not candidate.is_relative_to(workspace.resolve()):
+        raise PermissionError("Autopsy data_source must be inside the assignment workspace.")
+    if not candidate.is_file():
+        raise FileNotFoundError(candidate)
+    if candidate.suffix.lower() not in FORENSIC_EXTENSIONS:
+        raise ValueError(f"Unsupported forensic image extension: {candidate.suffix}")
+    return candidate
 
 
 def _discover_case(cases_dir: Path, case_name: str) -> Path:
@@ -128,11 +151,15 @@ def _discover_case(cases_dir: Path, case_name: str) -> Path:
     return candidates[-1]
 
 
-def autopsy_e2e_operation(workspace: Path, assignment: str) -> dict[str, Any]:
-    """Run the real Autopsy CLI ingest, then open the resulting case in the GUI."""
+def autopsy_e2e_operation(
+    workspace: Path,
+    assignment: str,
+    data_source: str | None = None,
+) -> dict[str, Any]:
+    """Run Autopsy CLI ingest, then open the resulting case in the GUI."""
     profile = _profile("autopsy")
     executable = _application_path(profile)
-    source = _find_data_source(workspace)
+    source = _resolve_data_source(workspace, data_source)
     cases_dir = workspace / "working" / "autopsy_cases"
     cases_dir.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", assignment)[:60] or "assignment"
