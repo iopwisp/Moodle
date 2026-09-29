@@ -30,8 +30,8 @@ class PlannedTask(BaseModel):
     title: str
     description: str
     tool: str = "manual"
-    action: str = "manual_review"
-    parameters: dict[str, str] = Field(default_factory=dict)
+    action: str = "core.manual_review"
+    parameters: dict[str, Any] = Field(default_factory=dict)
     required: bool = True
     evidence_required: bool = False
     evidence_type_required: str | None = None
