@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from importlib.metadata import entry_points
-from typing import Any
+from typing import Callable
 
+from ..tools.screenshot import take_screenshot
 from .autopsy import AutopsyAdapter
 from .base import Capability, ExecutionContext, IntegrationAdapter, IntegrationResult
 from .browser import BrowserAdapter
@@ -53,14 +54,12 @@ class IntegrationRegistry:
             raise ValueError(f"Unsupported capability: {name}") from exc
 
     def capabilities(self) -> list[Capability]:
-        return list(self._capabilities.values()) and [
-            capability for _, capability in self._capabilities.values()
-        ]
+        return [capability for _, capability in self._capabilities.values()]
 
     def execute(
         self,
         name: str,
-        parameters: dict[str, Any],
+        parameters: dict[str, object],
         context: ExecutionContext,
     ) -> IntegrationResult:
         normalized = self.normalize(name)
@@ -73,22 +72,19 @@ class IntegrationRegistry:
 
 def _load_external_adapters(registry: IntegrationRegistry) -> None:
     """Load adapters published by optional packages via Python entry points."""
-    try:
-        discovered = entry_points(group=PLUGIN_GROUP)
-    except TypeError:
-        discovered = entry_points().select(group=PLUGIN_GROUP)
+    discovered = entry_points().select(group=PLUGIN_GROUP)
     for entry_point in discovered:
         adapter_factory = entry_point.load()
-        adapter = adapter_factory() if isinstance(adapter_factory, type) else adapter_factory()
+        adapter = adapter_factory()
         registry.register(adapter)
 
 
-def build_registry(screenshot_fn: Any = None) -> IntegrationRegistry:
-    """Build the default registry and discover third-party adapters."""
+def build_registry(
+    screenshot_fn: Callable[..., object] = take_screenshot,
+) -> IntegrationRegistry:
+    """Build built-ins and discover third-party integrations."""
     registry = IntegrationRegistry()
-    registry.register(CoreAdapter(screenshot_fn=screenshot_fn or __import__(
-        "lab_agent.tools.screenshot", fromlist=["take_screenshot"]
-    ).take_screenshot))
+    registry.register(CoreAdapter(screenshot_fn=screenshot_fn))
     registry.register(BrowserAdapter())
     registry.register(DesktopAdapter())
     registry.register(AutopsyAdapter())
