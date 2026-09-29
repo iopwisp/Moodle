@@ -1,0 +1,5 @@
+name: browser
+status: executable_profile
+preferred_automation: Playwright
+automation: playwright
+scope: localhost_or_explicitly_authorized_targets_only

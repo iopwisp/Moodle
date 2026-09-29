@@ -1,0 +1,30 @@
+name: autopsy
+status: executable_profile
+executable_env: LAB_AGENT_AUTOPSY_PATH
+window_title_re: ".*Autopsy.*"
+launch_wait_seconds: 4
+window_timeout_seconds: 30
+supported_workflow:
+  - launch
+  - create_case
+  - add_data_source
+  - configure_ingest
+  - start_ingest
+  - wait_for_completion
+  - inspect_results
+  - capture_evidence
+operations:
+  launch:
+    - type: wait
+      seconds: 1
+  create_case:
+    - type: hotkey
+      keys: "^n"
+    - type: wait
+      seconds: 1
+  start_ingest:
+    - type: hotkey
+      keys: "^i"
+    - type: wait
+      seconds: 1
+notes: The adapter launches the configured Autopsy executable and performs only declared UIA or keyboard actions. Add version-specific controls here when a laboratory uses a different Autopsy UI.

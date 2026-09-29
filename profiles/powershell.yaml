@@ -1,0 +1,5 @@
+name: powershell
+status: implemented_with_explicit_opt_in
+timeout_seconds: 120
+default_unsafe_commands_enabled: false
+log_file: logs/commands.jsonl

@@ -1,0 +1,27 @@
+name: burp
+status: executable_profile
+executable_env: LAB_AGENT_BURP_PATH
+window_title_re: ".*Burp Suite.*"
+launch_wait_seconds: 4
+window_timeout_seconds: 30
+supported_workflow:
+  - launch
+  - configure_proxy
+  - intercept_request
+  - forward_request
+  - inspect_response
+  - capture_evidence
+operations:
+  launch:
+    - type: wait
+      seconds: 1
+  configure_proxy:
+    - type: hotkey
+      keys: "^p"
+    - type: wait
+      seconds: 1
+  capture_evidence:
+    - type: wait
+      seconds: 1
+scope: local_labs_or_explicitly_authorized_targets_only
+notes: The adapter requires LAB_AGENT_BURP_PATH and deliberately permits only profile-declared actions on an authorized local lab target.

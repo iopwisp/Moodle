@@ -1,0 +1,11 @@
+pydantic>=2.7
+python-docx>=1.1
+pypdf>=5.0
+reportlab>=4.2
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+playwright>=1.49
+pyautogui>=0.9.54
+pywinauto>=0.6.8
+PyYAML>=6.0
