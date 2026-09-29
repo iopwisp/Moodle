@@ -8,9 +8,10 @@ from pathlib import Path
 
 from .ai import build_ai_plan
 from .analyzer import analyze
-from .automation import autopsy_e2e_operation, browser_operation, desktop_operation, urls_from_text
 from .database import RunDatabase
 from .evidence import register_evidence
+from .integrations import ExecutionContext
+from .integrations.registry import build_registry
 from .models import PlannedTask, RunState, TaskStatus
 from .reports import generate_reports
 from .tools.screenshot import take_screenshot
@@ -48,6 +49,7 @@ def _run_step(
     task: PlannedTask,
     db: RunDatabase,
     allowed_targets: set[str],
+    registry,
 ) -> None:
     task.status = TaskStatus.RUNNING
     state.current_step = task.id
@@ -62,107 +64,64 @@ def _run_step(
         _event(db, state, "screenshot.created", {"step_id": task.id, "path": str(before)})
 
     try:
-        if task.action == "hash_inputs":
-            hashes = {
-                path.name: calculate_hashes(path)
-                for path in (workspace / "input").iterdir()
-                if path.is_file()
-            }
-            output = workspace / "results" / f"step_{task.id:02d}_hashes.json"
-            output.write_text(
-                json.dumps(hashes, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            _register(db, state, output, f"Hashes generated for step {task.id}", "hash", task.id)
+        context = ExecutionContext(
+            workspace=workspace,
+            assignment=state.assignment,
+            allowed_targets=allowed_targets,
+        )
+        result = registry.execute(task.action, task.parameters, context)
 
-        elif task.action == "autopsy_e2e":
-            result = autopsy_e2e_operation(workspace, state.assignment)
-            _register(
-                db, state, Path(result["screenshot"]),
-                "Verified Autopsy forensic workflow result",
-                "screenshot",
-                task.id,
-            )
-            _register(
-                db, state, Path(result["command_log"]),
-                "Autopsy command-line ingest execution log",
-                "log",
-                task.id,
-            )
-            _event(
-                db,
-                state,
-                "autopsy.completed",
-                {
-                    "case_dir": result["case_dir"],
-                    "data_source": result["data_source"],
-                    "pid": result["pid"],
-                },
-            )
-            if not result.get("verified"):
-                raise RuntimeError("Autopsy reported an unverified result.")
-
-        elif task.action == "desktop":
-            result = desktop_operation(
-                workspace,
-                task.parameters.get("profile", ""),
-                task.parameters.get("operation", "launch"),
-                state.assignment,
-            )
-            if not result.get("verified"):
-                raise RuntimeError("Desktop operation returned without verification.")
-            picture = Path(result["screenshot"])
+        for artifact in result.evidence:
+            artifact_path = Path(artifact["path"])
             _register(
                 db,
                 state,
-                picture,
-                f"{result['profile']} {result['operation']}",
-                "screenshot",
-                task.id,
-            )
-            _event(
-                db,
-                state,
-                "application.action.completed",
-                {"profile": result["profile"], "operation": result["operation"], "pid": result["pid"]},
-            )
-
-        elif task.action == "browser":
-            url = task.parameters.get("url") or next(iter(urls_from_text(task.description)), "")
-            result = browser_operation(workspace, url, allowed_targets)
-            _register(
-                db,
-                state,
-                Path(result["screenshot"]),
-                f"Browser result: {result['title']}",
-                "screenshot",
+                artifact_path,
+                artifact.get("description", f"Evidence for step {task.id}"),
+                artifact.get("type", "file"),
                 task.id,
             )
 
-        elif task.action == "screenshot":
-            picture = _step_screenshot(workspace, task, "result")
-            if not picture:
-                raise RuntimeError(
-                    "Screenshot capture is unavailable; install the gui extra and run "
-                    "in an interactive desktop session."
-                )
-            _register(
-                db, state, picture, f"Screenshot required by step {task.id}", "screenshot", task.id
-            )
-
-        elif task.action == "manual_review":
+        if result.blocked:
             task.status = TaskStatus.BLOCKED
             state.errors.append(
                 {
                     "step_id": task.id,
-                    "error": "Manual review is required; no result was claimed.",
+                    "error": result.details.get(
+                        "reason", "This capability requires manual verification."
+                    ),
                 }
             )
-            _event(db, state, "task.blocked", {"step_id": task.id})
+            _event(db, state, "task.blocked", {"step_id": task.id, "action": task.action})
             return
 
-        else:
-            raise ValueError(f"Unknown planned action: {task.action}")
+        if not result.verified:
+            reason = result.details.get("reason", "Capability returned an unverified result.")
+            raise RuntimeError(str(reason))
 
+        if task.evidence_required:
+            required_type = task.evidence_type_required
+            matching = [
+                artifact
+                for artifact in result.evidence
+                if required_type is None or artifact.get("type") == required_type
+            ]
+            if not matching:
+                raise RuntimeError(
+                    f"Step {task.id} requires {required_type or 'evidence'}, "
+                    "but the selected capability produced no matching evidence."
+                )
+
+        _event(
+            db,
+            state,
+            "capability.completed",
+            {
+                "step_id": task.id,
+                "action": task.action,
+                "verified": result.verified,
+            },
+        )
         task.status = TaskStatus.COMPLETED
         if task.id not in state.completed_steps:
             state.completed_steps.append(task.id)
@@ -171,6 +130,7 @@ def _run_step(
 
     except Exception as exc:  # noqa: BLE001
         task.status = TaskStatus.FAILED
+        state.errors = [error for error in state.errors if error.get("step_id") != task.id]
         state.errors.append({"step_id": task.id, "error": str(exc)})
         _event(db, state, "task.failed", {"step_id": task.id, "error": str(exc)})
 
@@ -199,11 +159,17 @@ def execute_workspace(
 ) -> RunState:
     state = load_state(workspace)
     db = RunDatabase(workspace)
+    registry = build_registry(take_screenshot)
     if not state.run_id:
         state.run_id = uuid.uuid4().hex
     allowed_targets = {target.casefold() for target in (allowed_targets or set())}
     db.sync_state(state)
-    _event(db, state, "agent.started", {"resume": True})
+    _event(
+        db,
+        state,
+        "agent.started",
+        {"resume": True, "capabilities": len(registry.capabilities())},
+    )
 
     for task in state.plan.steps:
         if load_state(workspace).status == "STOPPED":
@@ -216,7 +182,7 @@ def execute_workspace(
             TaskStatus.FAILED,
             TaskStatus.BLOCKED,
         }:
-            _run_step(workspace, state, task, db, allowed_targets)
+            _run_step(workspace, state, task, db, allowed_targets, registry)
 
     if generate_report:
         reports = generate_reports(workspace)
@@ -241,7 +207,15 @@ def run_assignment(
     state.run_id = uuid.uuid4().hex
     save_state(workspace, state)
     (workspace / "metadata" / "planner.json").write_text(
-        json.dumps({"provider": planner, "model": model}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "provider": planner,
+                "model": model,
+                "capabilities": [task.action for task in plan.steps],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     execute_workspace(workspace, allowed_targets)
