@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -37,10 +38,7 @@ def _application_path(profile: dict[str, Any]) -> str:
     return configured
 
 
-def desktop_operation(
-    workspace: Path, profile_name: str, operation: str, assignment: str
-) -> dict[str, Any]:
-    """Launch a configured app and execute its versioned UIA/keyboard profile operation."""
+def desktop_operation(workspace: Path, profile_name: str, operation: str, assignment: str) -> dict[str, Any]:
     profile = _profile(profile_name)
     operations = profile.get("operations", {})
     if operation not in operations:
@@ -76,27 +74,45 @@ def desktop_operation(
         else:
             raise ValueError(f"Unsupported profile action: {kind}")
         actions_done.append(kind)
-    screenshot = take_screenshot(
-        workspace, name=f"{profile_name}_{operation}_{int(time.time())}.png"
-    )
+    screenshot = take_screenshot(workspace, name=f"{profile_name}_{operation}_{int(time.time())}.png")
     return {
-        "pid": process.pid,
-        "profile": profile_name,
-        "operation": operation,
-        "actions": actions_done,
-        "screenshot": str(screenshot),
-        "verified": True,
+        "pid": process.pid, "profile": profile_name, "operation": operation,
+        "actions": actions_done, "screenshot": str(screenshot), "verified": True,
     }
 
 
+def _safe_extract_archives(workspace: Path) -> list[Path]:
+    """Extract only forensic-image members from ZIP archives, with traversal protection."""
+    destination = workspace / "working" / "autopsy_input"
+    destination.mkdir(parents=True, exist_ok=True)
+    found: list[Path] = []
+    extensions = {".dd", ".raw", ".img", ".001", ".e01", ".vmdk", ".vhd"}
+    for archive in (workspace / "input").rglob("*.zip"):
+        with zipfile.ZipFile(archive) as zf:
+            for member in zf.infolist():
+                if member.is_dir() or Path(member.filename).suffix.lower() not in extensions:
+                    continue
+                target = (destination / Path(member.filename).name).resolve()
+                if not target.is_relative_to(destination.resolve()):
+                    raise RuntimeError(f"Unsafe archive member: {member.filename}")
+                with zf.open(member) as source, target.open("wb") as sink:
+                    while chunk := source.read(1024 * 1024):
+                        sink.write(chunk)
+                found.append(target)
+    return found
+
+
 def _find_data_source(workspace: Path) -> Path:
+    extensions = {".dd", ".raw", ".img", ".001", ".e01", ".vmdk", ".vhd"}
     candidates = sorted(
         p for p in (workspace / "input").rglob("*")
-        if p.is_file() and p.suffix.lower() in {".dd", ".raw", ".img", ".001", ".e01", ".vmdk", ".vhd"}
+        if p.is_file() and p.suffix.lower() in extensions
     )
     if not candidates:
+        candidates = _safe_extract_archives(workspace)
+    if not candidates:
         raise FileNotFoundError(
-            "No supported forensic image found in workspace/input. "
+            "No supported forensic image found in workspace/input or its ZIP archives. "
             "Expected .dd, .raw, .img, .001, .e01, .vmdk or .vhd."
         )
     return candidates[0]
@@ -113,12 +129,7 @@ def _discover_case(cases_dir: Path, case_name: str) -> Path:
 
 
 def autopsy_e2e_operation(workspace: Path, assignment: str) -> dict[str, Any]:
-    """Create an Autopsy case, add a disk image, run ingest, open the case GUI, and capture proof.
-
-    The forensic image is never modified. Autopsy receives the immutable workspace copy.
-    Command-line ingest is used for the deterministic heavy operation; the GUI is then
-    opened for a human-readable, screenshot-able result.
-    """
+    """Run the real Autopsy CLI ingest, then open the resulting case in the GUI."""
     profile = _profile("autopsy")
     executable = _application_path(profile)
     source = _find_data_source(workspace)
@@ -129,13 +140,9 @@ def autopsy_e2e_operation(workspace: Path, assignment: str) -> dict[str, Any]:
     timeout = int(os.environ.get("LAB_AGENT_AUTOPSY_TIMEOUT", "21600"))
 
     command = [
-        executable,
-        "--createCase",
-        f"--caseName={case_name}",
-        f"--caseBaseDir={cases_dir}",
-        "--addDataSource",
-        f"--dataSourcePath={source}",
-        "--runIngest",
+        executable, "--createCase", f"--caseName={case_name}",
+        f"--caseBaseDir={cases_dir}", "--addDataSource",
+        f"--dataSourcePath={source}", "--runIngest",
     ]
     log_dir = workspace / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -143,48 +150,26 @@ def autopsy_e2e_operation(workspace: Path, assignment: str) -> dict[str, Any]:
     started = time.time()
     try:
         completed = subprocess.run(
-            command,
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+            command, cwd=workspace, capture_output=True, text=True,
+            timeout=timeout, check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        command_log.write_text(
-            json.dumps(
-                {
-                    "command": command,
-                    "timeout_seconds": timeout,
-                    "duration_seconds": time.time() - started,
-                    "stdout": exc.stdout or "",
-                    "stderr": exc.stderr or "",
-                    "verified": False,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        command_log.write_text(json.dumps({
+            "command": command, "timeout_seconds": timeout,
+            "duration_seconds": time.time() - started,
+            "stdout": exc.stdout or "", "stderr": exc.stderr or "", "verified": False,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
         raise RuntimeError(
             f"Autopsy ingest exceeded {timeout}s. Check {command_log} and resume after inspection."
         ) from exc
 
-    command_log.write_text(
-        json.dumps(
-            {
-                "command": command,
-                "return_code": completed.returncode,
-                "duration_seconds": time.time() - started,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
-                "verified": completed.returncode == 0,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    command_log.write_text(json.dumps({
+        "command": command, "return_code": completed.returncode,
+        "duration_seconds": time.time() - started,
+        "stdout": completed.stdout, "stderr": completed.stderr,
+        "verified": completed.returncode == 0,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
     if completed.returncode != 0:
         raise RuntimeError(
             f"Autopsy command-line ingest failed with exit code {completed.returncode}. "
@@ -192,27 +177,14 @@ def autopsy_e2e_operation(workspace: Path, assignment: str) -> dict[str, Any]:
         )
 
     case_dir = _discover_case(cases_dir, case_name)
-    if not case_dir.is_dir():
-        raise RuntimeError("Autopsy case directory was not created.")
-
-    gui_process = launch_application(
-        executable, ["--caseDir=" + str(case_dir)], cwd=workspace
-    )
+    gui_process = launch_application(executable, ["--caseDir=" + str(case_dir)], cwd=workspace)
     time.sleep(float(profile.get("launch_wait_seconds", 4)))
-
-    screenshot = take_screenshot(
-        workspace, name=f"autopsy_e2e_result_{int(time.time())}.png"
-    )
+    screenshot = take_screenshot(workspace, name=f"autopsy_e2e_result_{int(time.time())}.png")
     result = {
-        "pid": gui_process.pid,
-        "profile": "autopsy",
-        "operation": "e2e",
-        "data_source": str(source),
-        "case_dir": str(case_dir),
-        "command_log": str(command_log),
-        "screenshot": str(screenshot),
-        "verified": True,
-        "return_code": completed.returncode,
+        "pid": gui_process.pid, "profile": "autopsy", "operation": "e2e",
+        "data_source": str(source), "case_dir": str(case_dir),
+        "command_log": str(command_log), "screenshot": str(screenshot),
+        "verified": True, "return_code": completed.returncode,
     }
     (workspace / "results" / "autopsy.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -229,7 +201,6 @@ def _allowed_url(url: str, allowed_targets: set[str]) -> bool:
 
 
 def browser_operation(workspace: Path, url: str, allowed_targets: set[str]) -> dict[str, Any]:
-    """Visit an explicitly scoped page, collect page metadata, and save a screenshot."""
     if not _allowed_url(url, allowed_targets):
         raise PermissionError("Browser target must be localhost or declared in allowed_targets.")
     try:
@@ -249,9 +220,7 @@ def browser_operation(workspace: Path, url: str, allowed_targets: set[str]) -> d
         page.screenshot(path=str(output), full_page=True)
         status = response.status if response else None
         result = {
-            "url": page.url,
-            "title": page.title(),
-            "status": status,
+            "url": page.url, "title": page.title(), "status": status,
             "screenshot": str(output),
             "verified": status is not None and 200 <= status < 400,
         }
