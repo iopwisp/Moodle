@@ -4,6 +4,7 @@ executable_env: LAB_AGENT_AUTOPSY_PATH
 window_title_re: ".*Autopsy.*"
 launch_wait_seconds: 4
 window_timeout_seconds: 30
+
 supported_workflow:
   - launch
   - create_case
@@ -13,18 +14,41 @@ supported_workflow:
   - wait_for_completion
   - inspect_results
   - capture_evidence
+  - e2e
+
 operations:
   launch:
     - type: wait
       seconds: 1
+
   create_case:
     - type: hotkey
       keys: "^n"
     - type: wait
       seconds: 1
+
   start_ingest:
     - type: hotkey
       keys: "^i"
     - type: wait
       seconds: 1
-notes: The adapter launches the configured Autopsy executable and performs only declared UIA or keyboard actions. Add version-specific controls here when a laboratory uses a different Autopsy UI.
+
+  e2e:
+    # The actual forensic ingest is executed through Autopsy's supported
+    # command-line interface. The GUI is opened afterwards for visual
+    # verification and screenshots.
+    - type: wait
+      seconds: 1
+
+notes:
+  command_line_ingest:
+    - "--createCase"
+    - "--caseName"
+    - "--caseBaseDir"
+    - "--addDataSource"
+    - "--dataSourcePath"
+    - "--runIngest"
+  gui_verification:
+    - "The resulting case is opened with --caseDir."
+    - "A screenshot is captured only after the case directory and ingest command succeed."
+  source: "Autopsy official user documentation: command-line ingest and data sources."
