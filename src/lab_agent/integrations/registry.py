@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from importlib.metadata import entry_points
-from typing import Callable
 
 from ..tools.screenshot import take_screenshot
 from .autopsy import AutopsyAdapter
