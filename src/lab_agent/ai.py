@@ -104,12 +104,13 @@ def _from_payload(
             if not name:
                 raise ValueError("Capability parameter names cannot be empty.")
             parameters[name] = item["value"]
+        capability = registry.capability(action)
         tasks.append(
             PlannedTask(
                 id=index,
                 title=raw["title"][:160],
                 description=raw["description"],
-                tool=raw["tool"],
+                tool=capability.tool,
                 action=action,
                 parameters=parameters,
                 evidence_required=raw["evidence_required"],
