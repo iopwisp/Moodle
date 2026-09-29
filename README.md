@@ -98,3 +98,47 @@ py -3.12 -m pytest -q
 ```
 
 Набор тестов включает полный E2E путь: входное задание → план → выполнение → скриншоты → evidence → DOCX/PDF отчёты.
+
+
+## Архитектура интеграций
+
+Исполнитель работает через реестр capabilities, а не через ветвления «если Autopsy — сделай X, если Burp — сделай Y».
+
+Текущие capabilities:
+
+| Capability | Назначение |
+| --- | --- |
+| \`core.hash_inputs\` | Хеширование входных evidence |
+| \`core.screenshot\` | Снимок интерактивного рабочего стола |
+| \`core.manual_review\` | Безопасная остановка на ручную проверку |
+| \`browser.visit\` | Авторизованный web-lab через Playwright |
+| \`desktop.profile\` | Любая операция из YAML-профиля Windows UI Automation |
+| \`autopsy.e2e\` | Полный сценарий Autopsy для forensic image |
+
+AI-планировщик получает этот каталог и выбирает capability по имени. Runner вызывает реестр, получает единый результат \`verified/evidence/details\`, проверяет обязательное evidence и только после этого отмечает шаг выполненным.
+
+### Добавление нового приложения
+
+Для обычного Windows приложения достаточно добавить \`profiles/<app>.yaml\`. Capability \`desktop.profile\` автоматически использует executable environment variable, regex окна и разрешённые UIA-операции из профиля. Core runner при этом менять не нужно.
+
+Для сложного приложения создаётся отдельный адаптер в \`src/lab_agent/integrations/\`, который публикует свои capabilities, например:
+
+\`\`\`text
+packet_tracer.create_topology
+packet_tracer.configure_router
+packet_tracer.configure_switch
+packet_tracer.verify_connectivity
+\`\`\`
+
+Внешние Python-пакеты могут подключать такие адаптеры через entry point group \`doneasik_lab_agent.integrations\`. Поэтому добавление Packet Tracer, Overleaf, Wireshark или другого инструмента не требует переписывать planner, runner, evidence или reports.
+
+### Контракт capability
+
+Каждая интеграция публикует:
+1. уникальное имя capability;
+2. описание для AI-планировщика;
+3. список параметров;
+4. типы допустимого evidence;
+5. метод исполнения, возвращающий \`verified\`, детали и evidence.
+
+Это позволяет постепенно добавлять новые технологии без разрастания центрального runner.
