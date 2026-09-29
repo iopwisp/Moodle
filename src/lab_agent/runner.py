@@ -71,17 +71,6 @@ def _run_step(
         )
         result = registry.execute(task.action, task.parameters, context)
 
-        for artifact in result.evidence:
-            artifact_path = Path(artifact["path"])
-            _register(
-                db,
-                state,
-                artifact_path,
-                artifact.get("description", f"Evidence for step {task.id}"),
-                artifact.get("type", "file"),
-                task.id,
-            )
-
         if result.blocked:
             task.status = TaskStatus.BLOCKED
             state.errors.append(
@@ -98,6 +87,17 @@ def _run_step(
         if not result.verified:
             reason = result.details.get("reason", "Capability returned an unverified result.")
             raise RuntimeError(str(reason))
+
+        for artifact in result.evidence:
+            artifact_path = Path(artifact["path"])
+            _register(
+                db,
+                state,
+                artifact_path,
+                artifact.get("description", f"Evidence for step {task.id}"),
+                artifact.get("type", "file"),
+                task.id,
+            )
 
         if task.evidence_required:
             required_type = task.evidence_type_required
