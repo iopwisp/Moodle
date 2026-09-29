@@ -1,4 +1,4 @@
-"""AI planners that turn an assignment into a constrained execution plan."""
+"""AI planners that turn an assignment into a validated capability plan."""
 
 from __future__ import annotations
 
@@ -9,19 +9,13 @@ import urllib.request
 from typing import Any
 
 from .analyzer import build_plan
+from .automation import urls_from_text
+from .integrations.registry import IntegrationRegistry, build_registry
 from .models import AssignmentAnalysis, ExecutionPlan, PlannedTask
 
-ALLOWED_ACTIONS = {
-    "hash_inputs",
-    "desktop",
-    "autopsy_e2e",
-    "browser",
-    "screenshot",
-    "manual_review",
-}
 
-
-def _plan_schema() -> dict[str, Any]:
+def _plan_schema(registry: IntegrationRegistry) -> dict[str, Any]:
+    capabilities = sorted(capability.name for capability in registry.capabilities())
     item = {
         "type": "object",
         "additionalProperties": False,
@@ -29,17 +23,19 @@ def _plan_schema() -> dict[str, Any]:
             "title": {"type": "string"},
             "description": {"type": "string"},
             "tool": {"type": "string"},
-            "action": {"type": "string", "enum": sorted(ALLOWED_ACTIONS)},
+            "action": {"type": "string", "enum": capabilities},
             "parameters": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "profile": {"type": "string"},
-                    "operation": {"type": "string"},
-                    "url": {"type": "string"},
-                    "data_source": {"type": "string"},
+                "type": "array",
+                "description": "Extensible name/value parameters for the selected capability.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "name": {"type": "string"},
+                        "value": {"type": "string"},
+                    },
+                    "required": ["name", "value"],
                 },
-                "required": ["profile", "operation", "url", "data_source"],
             },
             "evidence_required": {"type": "boolean"},
             "evidence_type_required": {"anyOf": [{"type": "string"}, {"type": "null"}]},
@@ -62,40 +58,52 @@ def _plan_schema() -> dict[str, Any]:
     }
 
 
-def _prompt(analysis: AssignmentAnalysis) -> str:
+def _prompt(analysis: AssignmentAnalysis, registry: IntegrationRegistry) -> str:
     corpus = "\n\n".join(
         f"FILE: {path}\n{text[:30000]}" for path, text in analysis.extracted_text_files.items()
+    )
+    catalog = "\n".join(
+        capability.as_prompt_line() for capability in registry.capabilities()
     )
     return (
         """Build a JSON execution plan for an authorized university laboratory assignment.
 
-Allowed actions:
-- hash_inputs: calculate hashes of supplied evidence
-- autopsy_e2e: execute a complete Autopsy forensic workflow on a supplied disk image
-- desktop: execute a declared UI profile operation
-- browser: visit an explicitly authorized local lab target
-- screenshot: capture the current desktop
-- manual_review: use only when automation is genuinely impossible
+Capability catalog:
+"""
+        + catalog
+        + """
 
-For an Autopsy/disk-image assignment, prefer ONE autopsy_e2e step instead of several
-manual_review steps. The autopsy_e2e executor must create a case, add the disk image,
-run ingest, wait for completion, open the Autopsy GUI, and capture verified evidence.
-
-Never produce shell commands, destructive operations, arbitrary network targets, passwords,
-or raw mouse coordinates. Every visible result that the assignment requires must have
-evidence. Keep requirements concrete and independently verifiable.
+Rules:
+- action MUST be one of the capability names above.
+- Put capability-specific values into parameters as name/value pairs.
+- Never invent shell commands, destructive operations, passwords, raw mouse coordinates,
+  or arbitrary network targets.
+- Every visible result required by the assignment must have evidence.
+- Prefer an end-to-end capability when one exists, instead of reducing the workflow to
+  unrelated manual_review steps.
+- Verification must describe an observable post-condition, not merely "the action ran".
 
 """
         + corpus
     )
 
 
-def _from_payload(analysis: AssignmentAnalysis, value: dict[str, Any]) -> ExecutionPlan:
+def _from_payload(
+    analysis: AssignmentAnalysis,
+    value: dict[str, Any],
+    registry: IntegrationRegistry,
+) -> ExecutionPlan:
     tasks: list[PlannedTask] = []
     for index, raw in enumerate(value["steps"], start=1):
-        action = raw["action"]
-        if action not in ALLOWED_ACTIONS:
-            raise ValueError(f"AI produced unsupported action: {action}")
+        action = registry.normalize(raw["action"])
+        if not registry.has(action):
+            raise ValueError(f"AI produced unsupported capability: {action}")
+        parameters: dict[str, Any] = {}
+        for item in raw.get("parameters", []):
+            name = str(item["name"]).strip()
+            if not name:
+                raise ValueError("Capability parameter names cannot be empty.")
+            parameters[name] = item["value"]
         tasks.append(
             PlannedTask(
                 id=index,
@@ -103,7 +111,7 @@ def _from_payload(analysis: AssignmentAnalysis, value: dict[str, Any]) -> Execut
                 description=raw["description"],
                 tool=raw["tool"],
                 action=action,
-                parameters=raw["parameters"],
+                parameters=parameters,
                 evidence_required=raw["evidence_required"],
                 evidence_type_required=raw["evidence_type_required"],
                 expected_result=raw["expected_result"],
@@ -120,22 +128,29 @@ def _from_payload(analysis: AssignmentAnalysis, value: dict[str, Any]) -> Execut
     )
 
 
-def _openai_plan(analysis: AssignmentAnalysis, model: str) -> ExecutionPlan:
+def _openai_plan(
+    analysis: AssignmentAnalysis,
+    model: str,
+    registry: IntegrationRegistry,
+) -> ExecutionPlan:
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("OPENAI_API_KEY is required for the OpenAI planner.")
     body = {
         "model": model,
         "input": [
-            {"role": "system", "content": "Return the requested JSON only."},
-            {"role": "user", "content": _prompt(analysis)},
+            {
+                "role": "system",
+                "content": "Return the requested JSON only. Select only capabilities from the supplied catalog.",
+            },
+            {"role": "user", "content": _prompt(analysis, registry)},
         ],
         "text": {
             "format": {
                 "type": "json_schema",
                 "name": "lab_plan",
                 "strict": True,
-                "schema": _plan_schema(),
+                "schema": _plan_schema(registry),
             }
         },
     }
@@ -159,22 +174,28 @@ def _openai_plan(analysis: AssignmentAnalysis, model: str) -> ExecutionPlan:
                     break
     if not text:
         raise RuntimeError("OpenAI planner returned no text output.")
-    return _from_payload(analysis, json.loads(text))
+    return _from_payload(analysis, json.loads(text), registry)
 
 
-def _ollama_plan(analysis: AssignmentAnalysis, model: str) -> ExecutionPlan:
+def _ollama_plan(
+    analysis: AssignmentAnalysis,
+    model: str,
+    registry: IntegrationRegistry,
+) -> ExecutionPlan:
     endpoint = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
     body = {
         "model": model,
         "stream": False,
-        "format": _plan_schema(),
+        "format": _plan_schema(registry),
         "messages": [
-            {"role": "system", "content": "Return valid JSON only."},
-            {"role": "user", "content": _prompt(analysis)},
+            {"role": "system", "content": "Return valid JSON only using the supplied capability catalog."},
+            {"role": "user", "content": _prompt(analysis, registry)},
         ],
     }
     request = urllib.request.Request(
-        endpoint, data=json.dumps(body).encode(), method="POST",
+        endpoint,
+        data=json.dumps(body).encode(),
+        method="POST",
         headers={"Content-Type": "application/json"},
     )
     try:
@@ -182,12 +203,48 @@ def _ollama_plan(analysis: AssignmentAnalysis, model: str) -> ExecutionPlan:
             answer = json.loads(response.read())
     except urllib.error.URLError as exc:
         raise RuntimeError("Ollama planner is unavailable.") from exc
-    return _from_payload(analysis, json.loads(answer["message"]["content"]))
+    return _from_payload(analysis, json.loads(answer["message"]["content"]), registry)
+
+
+def _deterministic_plan(
+    analysis: AssignmentAnalysis,
+    registry: IntegrationRegistry,
+) -> ExecutionPlan:
+    plan = build_plan(analysis)
+    for task in plan.steps:
+        lowered = task.description.lower()
+        if any(term in lowered for term in ("autopsy", "disk image", ".dd", ".e01", "forensic")):
+            task.action = "autopsy.e2e"
+            task.parameters = {}
+            task.evidence_required = True
+            task.evidence_type_required = "screenshot"
+        elif "sha" in lowered or "hash" in lowered:
+            task.action = "core.hash_inputs"
+            task.parameters = {}
+            task.evidence_required = True
+            task.evidence_type_required = "hash"
+        elif "burp" in lowered:
+            task.action = "desktop.profile"
+            task.parameters = {"profile": "burp", "operation": "launch"}
+        elif "http" in lowered or "browser" in lowered:
+            urls = urls_from_text(task.description)
+            task.action = "browser.visit"
+            task.parameters = {"url": urls[0]} if urls else {}
+        elif task.evidence_type_required == "screenshot":
+            task.action = "core.screenshot"
+            task.parameters = {"description": task.description}
+    for task in plan.steps:
+        if not registry.has(task.action):
+            raise ValueError(f"Deterministic planner selected unavailable capability: {task.action}")
+    return plan
 
 
 def build_ai_plan(
-    analysis: AssignmentAnalysis, provider: str = "auto", model: str | None = None
+    analysis: AssignmentAnalysis,
+    provider: str = "auto",
+    model: str | None = None,
 ) -> tuple[ExecutionPlan, str]:
+    registry = build_registry()
     provider = provider.lower()
     if provider == "auto":
         provider = (
@@ -196,32 +253,9 @@ def build_ai_plan(
             else "deterministic"
         )
     if provider == "openai":
-        return _openai_plan(analysis, model or "gpt-6-astra"), "openai"
+        return _openai_plan(analysis, model or "gpt-6-astra", registry), "openai"
     if provider == "ollama":
-        return _ollama_plan(analysis, model or "qwen2.5:14b"), "ollama"
+        return _ollama_plan(analysis, model or "qwen2.5:14b", registry), "ollama"
     if provider == "deterministic":
-        plan = build_plan(analysis)
-        for task in plan.steps:
-            lowered = task.description.lower()
-            if any(term in lowered for term in ("autopsy", "disk image", ".dd", ".e01", "forensic")):
-                task.action = "autopsy_e2e"
-                task.parameters = {
-                    "profile": "autopsy",
-                    "operation": "e2e",
-                    "url": "",
-                    "data_source": "",
-                }
-                task.evidence_required = True
-                task.evidence_type_required = "screenshot"
-            elif "sha" in lowered or "hash" in lowered:
-                task.action = "hash_inputs"
-            elif "burp" in lowered:
-                task.action, task.parameters = "desktop", {
-                    "profile": "burp", "operation": "launch", "url": "", "data_source": "",
-                }
-            elif "http" in lowered or "browser" in lowered:
-                task.action = "browser"
-            elif task.evidence_type_required == "screenshot":
-                task.action = "screenshot"
-        return plan, "deterministic"
+        return _deterministic_plan(analysis, registry), "deterministic"
     raise ValueError("AI provider must be auto, openai, ollama, or deterministic.")
