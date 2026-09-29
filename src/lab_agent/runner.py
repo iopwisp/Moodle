@@ -11,11 +11,11 @@ from .analyzer import analyze
 from .database import RunDatabase
 from .evidence import register_evidence
 from .integrations import ExecutionContext
-from .integrations.registry import build_registry
+from .integrations.registry import IntegrationRegistry, build_registry
 from .models import PlannedTask, RunState, TaskStatus
 from .reports import generate_reports
 from .tools.screenshot import take_screenshot
-from .workspace import calculate_hashes, create_workspace, load_state, save_state
+from .workspace import create_workspace, load_state, save_state
 
 
 def _event(
@@ -49,7 +49,7 @@ def _run_step(
     task: PlannedTask,
     db: RunDatabase,
     allowed_targets: set[str],
-    registry,
+    registry: IntegrationRegistry,
 ) -> None:
     task.status = TaskStatus.RUNNING
     state.current_step = task.id
