@@ -1,0 +1,63 @@
+# DoneAsik Lab Agent configuration. Copy to config.yaml (or point LAB_AGENT_CONFIG at it).
+# Secrets (API keys, passwords) never go here - use environment variables or the OS keyring.
+
+workspace_root: workspace
+
+ai:
+  provider: auto            # auto | openai | ollama | deterministic
+  model: null               # e.g. gpt-6-astra (OpenAI) or qwen2.5:14b (Ollama)
+  base_url: null            # OpenAI-compatible endpoint or Ollama host
+  timeout_seconds: 90
+  max_retries: 2            # provider retries and plan re-validation attempts
+  fallback: deterministic   # deterministic | none (fail instead of falling back)
+  recovery_advice: true     # ask the AI for corrected parameters after a failed verification
+
+execution:
+  max_attempts: 2           # per step, including the first try
+  step_timeout_seconds: 3600
+  stop_on_failure: false
+
+screenshots:
+  mode: evidence            # evidence (only steps that need one) | all (before/after every step) | none
+  target: window            # window (focus + capture the application) | desktop
+
+browser:
+  headless: false           # headed is better for evidence-oriented labs
+  timeout_seconds: 45
+  allow_external_subresources: true   # passive GETs (CDN images/scripts); navigation stays in scope
+
+report:
+  student_name: ""
+  group: ""
+  student_id: ""
+  case_id: ""
+  course: ""
+  instructor: ""
+  language: en              # en | ru
+
+policy:
+  tools:
+    autopsy: {allowed: true}
+    packet_tracer: {allowed: true}
+    burp: {allowed: true}
+    browser: {allowed: true}
+    powershell: {allowed: true, require_confirmation: false}
+  powershell:
+    arbitrary: false        # powershell.run_script stays disabled unless true (and is then approved per step)
+  network:
+    localhost: true
+    authorized_targets_only: true
+    authorized_targets: []  # e.g. [dvwa.lab.local, "*.lab.local", www.overleaf.com]
+  require_confirmation_for_risk: [unsafe]
+
+plugins:
+  entry_points: true        # load packages registered under doneasik_lab_agent.integrations
+  directories: []           # folders with *.py plugins defining create_adapters(services)
+
+logging:
+  level: INFO
+  json_logs: false
+
+applications: {}            # explicit paths override discovery, e.g.
+#  autopsy: "C:/Program Files/Autopsy-4.22.1/bin/autopsy64.exe"
+#  packet_tracer: "C:/Program Files/Cisco Packet Tracer 8.2.2/bin/PacketTracer.exe"

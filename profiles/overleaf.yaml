@@ -1,0 +1,24 @@
+name: overleaf
+display_name: Overleaf (web)
+status: web_profile
+scope: requires www.overleaf.com in policy.network.authorized_targets (or --allowed-target www.overleaf.com)
+
+# Playwright selectors; update them here when the Overleaf UI changes.
+selectors:
+  base_url: "https://www.overleaf.com"
+  email: "input[name='email']"
+  password: "input[name='password']"
+  submit: "button[type='submit']"
+  logged_in_url: "/project"
+  new_project: "button:has-text('New project'), button:has-text('New Project')"
+  upload_project: "text=Upload project"
+  file_input: "input[type='file']"
+  upload_button: "button[aria-label='Upload']"
+  recompile: "button:has-text('Recompile')"
+  compile_error: ".log-entry-header-error, [data-testid='log-entry-error']"
+  download_pdf: "a[aria-label='Download PDF'], a:has-text('Download PDF')"
+  pdf_viewer: ".pdf-viewer, .pdfjs-viewer"
+  editor: ".cm-content, #editor"
+
+versions: {}
+operations: {}

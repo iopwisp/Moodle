@@ -1,0 +1,51 @@
+name: packet_tracer
+display_name: Cisco Packet Tracer
+status: executable_profile
+executable_env: LAB_AGENT_PACKET_TRACER_PATH
+# Verified on Packet Tracer 8.2.2 / Windows 11: main window class CAppWindow; the account
+# login is a separate window (class CNetspaceLogin) whose content is an embedded web view.
+window: {class_name: CAppWindow}
+launch_wait_seconds: 5
+window_timeout_seconds: 120
+ready_settle_seconds: 2
+command_delay_seconds: 0.4
+output_settle_seconds: 1.0
+ping_wait_seconds: 6
+
+# Dialogs that stop automation and need the student (human-in-the-loop).
+blockers:
+  - window: {any: [{class_name: CNetspaceLogin}, {title_re: "(?i)(skills ?for ?all|networking academy|packet tracer login|sign in)"}]}
+    reason: "Packet Tracer requires a Cisco account login. Log in once in the open window, then resume the run."
+
+# Pop-ups the computer-use loop may close.
+dismiss:
+  - window: {title_re: "(?i)(update|what's new)"}
+    control: {title_re: "(?i)^(later|no|close|ok)$", control_type: Button}
+
+# How to reach the text consoles inside a device window (title = device name).
+device_tabs:
+  CLI: {title: CLI, control_type: TabItem}
+  Command Prompt:
+    - {title: Desktop, control_type: TabItem}
+    - {title_re: "^Command Prompt$"}
+console: {any: [{control_type: Edit}, {control_type: Document}]}
+
+operations:
+  launch: []
+  save_as:
+    - {type: hotkey, keys: "^+s"}
+    - {type: wait_until, window: {title_re: "(?i)save"}, timeout: 15}
+    - {type: type, window: {title_re: "(?i)save"}, control: {control_type: Edit, found_index: 0}, text: "{path}"}
+    - {type: hotkey, keys: "{ENTER}"}
+    - {type: wait, seconds: 2}
+
+verification: {}
+
+versions:
+  "8":
+    notes: "Packet Tracer 8.x (Qt). Device windows are top-level windows titled with the device name."
+
+notes: >
+  Canvas actions (placing devices, drawing cables) have no accessibility controls and are not declared here;
+  the agent asks the student to perform them (BLOCKED with instructions) and verifies the result through the CLI.
+  Selectors marked in this file must be confirmed with `lab-agent` desktop.observe on your Packet Tracer version.

@@ -1,27 +1,49 @@
 name: burp
+display_name: Burp Suite
 status: executable_profile
 executable_env: LAB_AGENT_BURP_PATH
+window: {title_re: "Burp Suite"}
 window_title_re: ".*Burp Suite.*"
-launch_wait_seconds: 4
-window_timeout_seconds: 30
-supported_workflow:
-  - launch
-  - configure_proxy
-  - intercept_request
-  - forward_request
-  - inspect_response
-  - capture_evidence
-operations:
-  launch:
-    - type: wait
-      seconds: 1
-  configure_proxy:
-    - type: hotkey
-      keys: "^p"
-    - type: wait
-      seconds: 1
-  capture_evidence:
-    - type: wait
-      seconds: 1
+launch_wait_seconds: 8
+window_timeout_seconds: 180
+ready_settle_seconds: 3
+launcher_exits: false
 scope: local_labs_or_explicitly_authorized_targets_only
-notes: The adapter requires LAB_AGENT_BURP_PATH and deliberately permits only profile-declared actions on an authorized local lab target.
+
+blockers:
+  - window: {title_re: "(?i)licen[cs]e"}
+    reason: "Burp Suite shows a licence dialog; accept it once manually, then resume."
+
+dismiss:
+  - window: {title_re: "(?i)(update|new version)"}
+    control: {title_re: "(?i)^(later|close|not now)$"}
+
+operations:
+  launch: []
+  # Burp is a Java Swing application: UI Automation needs the Java Access Bridge
+  # (run `jabswitch -enable` with Burp's bundled JRE once). Keyboard shortcuts below
+  # are Burp defaults; adjust them in Settings > User interface > Hotkeys if changed.
+  start_temporary_project:
+    - {type: wait, seconds: 2}
+  intercept_on:
+    - {type: focus_window}
+    - {type: hotkey, keys: "^+p"}
+    - {type: wait, seconds: 1}
+    - {type: hotkey, keys: "^t"}
+  forward:
+    - {type: focus_window}
+    - {type: hotkey, keys: "^f"}
+    - {type: wait, seconds: 1}
+  send_to_repeater:
+    - {type: focus_window}
+    - {type: hotkey, keys: "^r"}
+    - {type: wait, seconds: 1}
+    - {type: hotkey, keys: "^+r"}
+
+verification:
+  launch:
+    - {type: window_exists, title_re: "Burp Suite"}
+
+notes: >
+  Proxy behaviour is verified through the network (listener on 127.0.0.1:8080, http://burp/ page, held requests),
+  not through the GUI. Use Burp only with local, intentionally vulnerable or explicitly authorized targets.

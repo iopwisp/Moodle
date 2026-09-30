@@ -7,15 +7,38 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Python 3.12
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install
-        run: python -m pip install -e ".[documents,web,dev]" PyYAML>=6.0
+          cache: pip
+      - name: Install (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[documents,web,browser,dev]"
+          python -m playwright install --with-deps chromium
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[documents,web,browser,gui,dev]"
+          python -m playwright install chromium
       - name: Ruff
         run: python -m ruff check src tests
+      - name: Mypy
+        run: python -m mypy
       - name: Tests
-        run: python -m pytest -q
+        run: python -m pytest -q -rs
+      - name: CLI smoke test
+        run: |
+          python -m lab_agent.cli capabilities --tool core
+          python -m lab_agent.cli plugins
+          python -m lab_agent.cli doctor --no-wsl --json

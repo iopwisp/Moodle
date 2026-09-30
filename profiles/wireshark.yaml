@@ -1,0 +1,31 @@
+name: wireshark
+display_name: Wireshark
+status: executable_profile
+executable_env: LAB_AGENT_WIRESHARK_PATH
+# Verified on Wireshark 4.4.2 (Windows 11): the main window is titled with the capture
+# file name (e.g. "traffic.pcap"), so it is matched by its Qt class name.
+window: {class_name: WiresharkMainWindow}
+launch_wait_seconds: 3
+window_timeout_seconds: 60
+ready_settle_seconds: 2
+
+dismiss:
+  - window: {title: "Software Update", class_name: "#32770"}
+    control: {title: "Remind me later", control_type: Button}
+
+operations:
+  launch: []
+  dismiss_update:
+    - {type: click, window: {title: "Software Update"}, control: {title: "Remind me later", control_type: Button}, timeout: 5}
+  apply_display_filter:
+    - {type: type, control: {title: "Display filter entry", control_type: Edit}, text: "{filter}"}
+    - {type: focus_window}
+    - {type: hotkey, keys: "{ENTER}"}
+
+verification:
+  launch:
+    - {type: window_exists, class_name: WiresharkMainWindow}
+
+notes: >
+  Packet analysis is performed with tshark/capinfos from the same installation (exact, reproducible);
+  the GUI is opened with -r <file> -Y <filter> for window screenshots.

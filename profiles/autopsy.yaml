@@ -1,54 +1,53 @@
 name: autopsy
+display_name: Autopsy
 status: executable_profile
 executable_env: LAB_AGENT_AUTOPSY_PATH
+window: {title_re: "Autopsy"}
 window_title_re: ".*Autopsy.*"
 launch_wait_seconds: 4
-window_timeout_seconds: 30
+window_timeout_seconds: 180
+ready_settle_seconds: 3
 
 supported_workflow:
-  - launch
   - create_case
   - add_data_source
   - configure_ingest
   - start_ingest
   - wait_for_completion
   - inspect_results
+  - search_artifacts
+  - export_artifact
   - capture_evidence
   - e2e
 
+dismiss:
+  - window: {title_re: "(?i)welcome"}
+    control: {title_re: "(?i)^close$", control_type: Button}
+
 operations:
-  launch:
-    - type: wait
-      seconds: 1
+  launch: []
+  capture_evidence:
+    - {type: focus_window}
+    - {type: wait, seconds: 1}
 
-  create_case:
-    - type: hotkey
-      keys: "^n"
-    - type: wait
-      seconds: 1
+goals:
+  close_welcome:
+    description: "Close the Welcome dialog so the case tree is visible"
+    steps:
+      - name: close welcome
+        action: click
+        targets: [{title: Close, control_type: Button}]
+        done_when: {window_absent: {title_re: "(?i)welcome"}}
 
-  start_ingest:
-    - type: hotkey
-      keys: "^i"
-    - type: wait
-      seconds: 1
-
-  e2e:
-    # The actual forensic ingest is executed through Autopsy's supported
-    # command-line interface. The GUI is opened afterwards for visual
-    # verification and screenshots.
-    - type: wait
-      seconds: 1
+verification:
+  capture_evidence:
+    - {type: window_exists, title_re: "Autopsy"}
 
 notes:
   command_line_ingest:
-    - "--createCase"
-    - "--caseName"
-    - "--caseBaseDir"
-    - "--addDataSource"
-    - "--dataSourcePath"
-    - "--runIngest"
-  gui_verification:
-    - "The resulting case is opened with --caseDir."
-    - "A screenshot is captured only after the case directory and ingest command succeed."
-  source: "Autopsy official user documentation: command-line ingest and data sources."
+    - "--createCase --caseName=<name> --caseBaseDir=<dir>"
+    - "--caseDir=<case> --addDataSource --dataSourcePath=<image>"
+    - "--caseDir=<case> --runIngest [--ingestProfile=<profile>]"
+    - "--caseDir=<case> --generateReports"
+  verification: "Results are verified by reading autopsy.db (data_source_info, ingest_jobs, tsk_files, blackboard_artifacts)."
+  source: "Autopsy user documentation: Command Line Ingest."

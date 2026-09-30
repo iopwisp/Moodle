@@ -1,262 +1,308 @@
-"""AI planners that turn an assignment into a validated capability plan."""
+"""Capability-aware planning (AI or deterministic) and AI recovery advice.
+
+The planner sees the assignment text, the classified evidence inventory, the
+available environment and the capability catalog of the registry.  It must
+answer with a JSON plan whose ``action`` values come from that catalog; the
+plan is then validated (capability exists, parameters match the declaration,
+dependencies point backwards, verification checks are known, network targets
+are authorized).  Invalid AI plans are sent back once with the validation
+errors; if the provider still fails the deterministic planner is used (and
+the fallback is recorded), unless ``ai.fallback: none``.
+"""
 
 from __future__ import annotations
 
 import json
-import os
-import urllib.error
-import urllib.request
 from typing import Any
 
-from .analyzer import build_plan
-from .automation import urls_from_text
+from .config import AgentConfig, get_config
 from .integrations.registry import IntegrationRegistry, build_registry
+from .llm import (
+    LLMProvider,
+    ProviderError,
+    make_provider,
+    provider_from_config,
+    resolve_provider_name,
+)
 from .models import AssignmentAnalysis, ExecutionPlan, PlannedTask
+from .planning import PlanValidationError, normalize_plan, validate_plan
+from .policy import PolicyEngine
+
+__all__ = ["advise_recovery", "build_ai_plan", "deterministic_plan", "plan_schema", "provider_from_config"]
+
+_NAME_VALUE = {"type": "object", "additionalProperties": False, "properties": {"name": {"type": "string"},
+                                                                              "value": {"type": "string"}},
+               "required": ["name", "value"]}
 
 
-def _plan_schema(registry: IntegrationRegistry) -> dict[str, Any]:
+def plan_schema(registry: IntegrationRegistry) -> dict[str, Any]:
     capabilities = sorted(capability.name for capability in registry.capabilities())
+    check = {"type": "object", "additionalProperties": False,
+             "properties": {"type": {"type": "string"}, "fields": {"type": "array", "items": _NAME_VALUE}},
+             "required": ["type", "fields"]}
     item = {
-        "type": "object",
-        "additionalProperties": False,
+        "type": "object", "additionalProperties": False,
         "properties": {
-            "title": {"type": "string"},
-            "description": {"type": "string"},
-            "tool": {"type": "string"},
+            "title": {"type": "string"}, "description": {"type": "string"},
             "action": {"type": "string", "enum": capabilities},
-            "parameters": {
-                "type": "array",
-                "description": "Extensible name/value parameters for the selected capability.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "name": {"type": "string"},
-                        "value": {"type": "string"},
-                    },
-                    "required": ["name", "value"],
-                },
-            },
+            "parameters": {"type": "array", "description": "name/value parameters of the capability", "items": _NAME_VALUE},
+            "depends_on": {"type": "array", "items": {"type": "integer"}},
             "evidence_required": {"type": "boolean"},
             "evidence_type_required": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            "expected_result": {"type": "string"},
-            "verification": {"type": "string"},
+            "screenshot_required": {"type": "boolean"},
+            "expected_result": {"type": "string"}, "verification": {"type": "string"},
+            "verification_checks": {"type": "array", "items": check},
+            "requirement_refs": {"type": "array", "items": {"type": "string"}},
         },
-        "required": [
-            "title", "description", "tool", "action", "parameters",
-            "evidence_required", "evidence_type_required", "expected_result", "verification",
-        ],
+        "required": ["title", "description", "action", "parameters", "depends_on", "evidence_required",
+                     "evidence_type_required", "screenshot_required", "expected_result", "verification",
+                     "verification_checks", "requirement_refs"],
     }
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "objective": {"type": "string"},
-            "steps": {"type": "array", "items": item},
-        },
-        "required": ["objective", "steps"],
-    }
+    return {"type": "object", "additionalProperties": False,
+            "properties": {"objective": {"type": "string"}, "steps": {"type": "array", "items": item}},
+            "required": ["objective", "steps"]}
 
 
-def _prompt(analysis: AssignmentAnalysis, registry: IntegrationRegistry) -> str:
-    corpus = "\n\n".join(
-        f"FILE: {path}\n{text[:30000]}" for path, text in analysis.extracted_text_files.items()
-    )
-    catalog = "\n".join(
-        capability.as_prompt_line() for capability in registry.capabilities()
-    )
-    return (
-        """Build a JSON execution plan for an authorized university laboratory assignment.
-
-Capability catalog:
-"""
-        + catalog
-        + """
-
-Rules:
-- action MUST be one of the capability names above.
-- Put capability-specific values into parameters as name/value pairs.
-- Never invent shell commands, destructive operations, passwords, raw mouse coordinates,
-  or arbitrary network targets.
-- Every visible result required by the assignment must have evidence.
-- Prefer an end-to-end capability when one exists, instead of reducing the workflow to
-  unrelated manual_review steps.
-- Verification must describe an observable post-condition, not merely "the action ran".
-
-"""
-        + corpus
-    )
+SYSTEM_PROMPT = (
+    "You plan the execution of an authorized university laboratory assignment. Return JSON only. "
+    "Use only capabilities from the catalog; never invent capabilities, shell commands, file paths outside the "
+    "inventory, mouse coordinates, credentials or network targets."
+)
 
 
-def _from_payload(
-    analysis: AssignmentAnalysis,
-    value: dict[str, Any],
-    registry: IntegrationRegistry,
-) -> ExecutionPlan:
+def _prompt(analysis: AssignmentAnalysis, registry: IntegrationRegistry, environment: dict[str, Any] | None,
+            targets: set[str], feedback: list[str] | None = None) -> str:
+    inventory = "\n".join(
+        f"- {f.workspace_path or f.path} | role={f.role} | {f.size} bytes{' | ' + f.note if f.note else ''}" for f in analysis.files
+    ) or "\n".join(f"- {p}" for p in analysis.source_files)
+    apps = environment.get("applications", {}) if environment else {}
+    env_lines = "\n".join(f"- {name}: {'available ' + str(info.get('version') or '') if info.get('available') else 'NOT available'}"
+                          for name, info in sorted(apps.items())) or "- unknown (not discovered)"
+    corpus = "\n\n".join(f"FILE: {path}\n{text[:30000]}" for path, text in analysis.extracted_text_files.items()
+                         if not text.startswith("[ZIP member"))[:120000]
+    parts = [
+        "CAPABILITY CATALOG (tool.action: description, parameters, evidence, verification):",
+        registry.catalog(),
+        "\nEVIDENCE INVENTORY (use these workspace paths in parameters):",
+        inventory,
+        "\nENVIRONMENT:",
+        env_lines,
+        f"\nAUTHORIZED NETWORK TARGETS: localhost, 127.0.0.1{', ' + ', '.join(sorted(targets)) if targets else ''}",
+        "\nRULES:",
+        "- action MUST be a catalog capability; parameters only those it declares, as name/value strings.",
+        "- Steps are numbered from 1 in order; depends_on lists earlier step numbers whose success is required.",
+        ("- Prefer capabilities that produce verifiable evidence; add verification_checks (types: file_exists, text_contains, "
+         "hash_match, csv_rows, zip_valid, pdf_valid, image_valid, sqlite_query, details_value, http_status, port_open, "
+         "window_exists) describing observable post-conditions."),
+        ("- Mark screenshot_required when the assignment asks for a screenshot of that step; link requirement_refs to the "
+         "assignment sentences each step satisfies."),
+        ("- When something cannot be automated safely (essay answers, logins with captcha, canvas drawing) use "
+         "core.manual_review with a precise reason instead of pretending."),
+        "- Do not plan capabilities whose application is NOT available unless no alternative exists; they will be BLOCKED.",
+    ]
+    if feedback:
+        parts += ["\nYOUR PREVIOUS PLAN WAS REJECTED. Fix these problems:", *[f"- {item}" for item in feedback]]
+    parts += ["\nASSIGNMENT MATERIALS:", corpus]
+    return "\n".join(parts)
+
+
+def _pairs(items: list[dict[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for item in items:
+        name = str(item.get("name", "")).strip()
+        if not name:
+            raise ValueError("parameter names cannot be empty")
+        result[name] = item.get("value")
+    return result
+
+
+def plan_from_payload(analysis: AssignmentAnalysis, value: dict[str, Any], registry: IntegrationRegistry,
+                      planner: str) -> ExecutionPlan:
     tasks: list[PlannedTask] = []
     for index, raw in enumerate(value["steps"], start=1):
-        action = registry.normalize(raw["action"])
-        if not registry.has(action):
-            raise ValueError(f"AI produced unsupported capability: {action}")
-        parameters: dict[str, Any] = {}
-        for item in raw.get("parameters", []):
-            name = str(item["name"]).strip()
-            if not name:
-                raise ValueError("Capability parameter names cannot be empty.")
-            parameters[name] = item["value"]
-        capability = registry.capability(action)
-        tasks.append(
-            PlannedTask(
-                id=index,
-                title=raw["title"][:160],
-                description=raw["description"],
-                tool=capability.tool,
-                action=action,
-                parameters=parameters,
-                evidence_required=raw["evidence_required"],
-                evidence_type_required=raw["evidence_type_required"],
-                expected_result=raw["expected_result"],
-                verification=raw["verification"],
-            )
-        )
-    if not tasks:
-        raise ValueError("AI returned a plan without tasks")
-    return ExecutionPlan(
-        assignment=analysis.assignment,
-        objective=value["objective"],
-        steps=tasks,
-        source_files=analysis.source_files,
-    )
+        action = registry.normalize(str(raw["action"]))
+        checks = [{"type": check["type"], **_pairs(check.get("fields", []))} for check in raw.get("verification_checks", [])]
+        tasks.append(PlannedTask(
+            id=index, title=str(raw["title"])[:160], description=str(raw["description"]),
+            tool=registry.capability(action).tool if registry.has(action) else action.split(".")[0],
+            action=action, parameters=_pairs(raw.get("parameters", [])),
+            depends_on=[int(d) for d in raw.get("depends_on", [])],
+            evidence_required=bool(raw.get("evidence_required")), evidence_type_required=raw.get("evidence_type_required"),
+            screenshot_required=bool(raw.get("screenshot_required")),
+            expected_result=str(raw.get("expected_result", "")), verification=str(raw.get("verification", "")),
+            verification_checks=checks, requirement_refs=[str(r)[:300] for r in raw.get("requirement_refs", [])],
+        ))
+    return ExecutionPlan(assignment=analysis.assignment, objective=str(value.get("objective") or analysis.objective),
+                         steps=tasks, source_files=analysis.source_files, planner=planner)
 
 
-def _openai_plan(
-    analysis: AssignmentAnalysis,
-    model: str,
-    registry: IntegrationRegistry,
-) -> ExecutionPlan:
-    key = os.environ.get("OPENAI_API_KEY")
-    if not key:
-        raise RuntimeError("OPENAI_API_KEY is required for the OpenAI planner.")
-    body = {
-        "model": model,
-        "input": [
-            {
-                "role": "system",
-                "content": "Return the requested JSON only. Select only capabilities from the supplied catalog.",
-            },
-            {"role": "user", "content": _prompt(analysis, registry)},
-        ],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "lab_plan",
-                "strict": True,
-                "schema": _plan_schema(registry),
-            }
-        },
-    }
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(body).encode(),
-        method="POST",
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            answer = json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"OpenAI planner request failed: HTTP {exc.code}") from exc
-    text = answer.get("output_text")
-    if not text:
-        for output in answer.get("output", []):
-            for content in output.get("content", []):
-                if content.get("type") == "output_text":
-                    text = content.get("text")
-                    break
-    if not text:
-        raise RuntimeError("OpenAI planner returned no text output.")
-    return _from_payload(analysis, json.loads(text), registry)
+def ai_plan(analysis: AssignmentAnalysis, provider: LLMProvider, registry: IntegrationRegistry, policy: PolicyEngine,
+            environment: dict[str, Any] | None = None, attempts: int = 2) -> ExecutionPlan:
+    feedback: list[str] | None = None
+    last_error: Exception | None = None
+    for _ in range(max(1, attempts)):
+        answer = provider.complete_json(SYSTEM_PROMPT, _prompt(analysis, registry, environment, policy.targets, feedback),
+                                        plan_schema(registry), name="lab_plan")
+        try:
+            plan = plan_from_payload(analysis, answer, registry, f"{provider.name}:{provider.model}")
+        except (KeyError, ValueError) as exc:
+            last_error, feedback = exc, [str(exc)]
+            continue
+        validation = validate_plan(plan, registry, policy)
+        if validation.ok:
+            plan.warnings = [str(issue) for issue in validation.warnings]
+            return plan
+        last_error, feedback = PlanValidationError(validation), [str(issue) for issue in validation.errors]
+    raise ProviderError(f"AI plan rejected after {attempts} attempt(s): {last_error}")
 
 
-def _ollama_plan(
-    analysis: AssignmentAnalysis,
-    model: str,
-    registry: IntegrationRegistry,
-) -> ExecutionPlan:
-    endpoint = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
-    body = {
-        "model": model,
-        "stream": False,
-        "format": _plan_schema(registry),
-        "messages": [
-            {"role": "system", "content": "Return valid JSON only using the supplied capability catalog."},
-            {"role": "user", "content": _prompt(analysis, registry)},
-        ],
-    }
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(body).encode(),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            answer = json.loads(response.read())
-    except urllib.error.URLError as exc:
-        raise RuntimeError("Ollama planner is unavailable.") from exc
-    return _from_payload(analysis, json.loads(answer["message"]["content"]), registry)
+# ---------------------------------------------------------------------------- deterministic
+def _score(capability: Any, text: str) -> float:
+    return float(sum(1 for keyword in capability.keywords if keyword.lower() in text))
 
 
-def _deterministic_plan(
-    analysis: AssignmentAnalysis,
-    registry: IntegrationRegistry,
-) -> ExecutionPlan:
-    plan = build_plan(analysis)
-    for task in plan.steps:
-        lowered = task.description.lower()
-        if any(term in lowered for term in ("autopsy", "disk image", ".dd", ".e01", "forensic")):
-            task.action = "autopsy.e2e"
-            task.parameters = {}
-            task.evidence_required = True
-            task.evidence_type_required = "screenshot"
-        elif "sha" in lowered or "hash" in lowered:
-            task.action = "core.hash_inputs"
-            task.parameters = {}
-            task.evidence_required = True
-            task.evidence_type_required = "hash"
-        elif "burp" in lowered:
-            task.action = "desktop.profile"
-            task.parameters = {"profile": "burp", "operation": "launch"}
-        elif "http" in lowered or "browser" in lowered:
-            urls = urls_from_text(task.description)
-            task.action = "browser.visit"
-            task.parameters = {"url": urls[0]} if urls else {}
-        elif task.evidence_type_required == "screenshot":
-            task.action = "core.screenshot"
-            task.parameters = {"description": task.description}
-    for task in plan.steps:
-        if not registry.has(task.action):
-            raise ValueError(f"Deterministic planner selected unavailable capability: {task.action}")
-    return plan
+def deterministic_plan(analysis: AssignmentAnalysis, registry: IntegrationRegistry) -> ExecutionPlan:
+    """Adapter workflow templates first; otherwise match each requirement to a capability by keywords."""
+    templated: list[dict[str, Any]] = []
+    for adapter in registry.adapters():
+        hook = getattr(adapter, "plan_templates", None)
+        if callable(hook):
+            proposal = hook(analysis, registry) or []
+            offset = len(templated)
+            for step in proposal:
+                step = dict(step)
+                step["depends_on"] = [d + offset for d in step.get("depends_on", [])]
+                step["run_after"] = [d + offset for d in step.get("run_after", [])]
+                templated.append(step)
+    tasks: list[PlannedTask] = []
+    if templated:
+        for index, step in enumerate(templated, start=1):
+            capability = registry.capability(step["action"])
+            evidence_type = step.get("evidence_type")
+            tasks.append(PlannedTask(
+                id=index, title=step["title"], description=step.get("description", step["title"]), tool=capability.tool,
+                action=capability.name, parameters=dict(step.get("parameters", {})), depends_on=step["depends_on"],
+                run_after=step["run_after"], required=bool(step.get("required", True)),
+                evidence_required=evidence_type is not None, evidence_type_required=evidence_type,
+                expected_result=capability.verification, verification=capability.verification,
+                requirement_refs=[step["requirement"]] if step.get("requirement") else [],
+            ))
+    else:
+        for index, requirement in enumerate(analysis.requirements or [analysis.objective], start=1):
+            tasks.append(_match_requirement(index, requirement, analysis, registry))
+    plan = ExecutionPlan(assignment=analysis.assignment, objective=analysis.title or analysis.objective, steps=tasks,
+                         source_files=analysis.source_files, planner="deterministic")
+    return normalize_plan(plan, registry)
 
 
+def _match_requirement(index: int, requirement: str, analysis: AssignmentAnalysis, registry: IntegrationRegistry) -> PlannedTask:
+    lowered = requirement.lower()
+    screenshot = any(term in lowered for term in ("screenshot", "screen shot", "скриншот", "снимок экрана"))
+    best: tuple[float, str, dict[str, Any]] | None = None
+    for adapter in registry.adapters():
+        hook = getattr(adapter, "match_requirement", None)
+        if callable(hook):
+            match = hook(requirement, analysis)
+            if match and (best is None or match[2] > best[0]):
+                best = (match[2], match[0], match[1])
+    for capability in registry.capabilities():
+        score = _score(capability, lowered)
+        if score <= 0 or any(p.required for p in capability.params()) or capability.risk != "safe":
+            continue
+        if best is None or score > best[0]:
+            best = (score, capability.name, {})
+    if best is None:
+        return PlannedTask(id=index, title=requirement[:120], description=requirement, tool="core", action="core.manual_review",
+                           parameters={"reason": "No registered capability can perform this requirement automatically."},
+                           requirement_refs=[requirement[:300]], screenshot_required=screenshot)
+    capability = registry.capability(best[1])
+    evidence_type = "screenshot" if screenshot and "screenshot" in capability.evidence_types else (
+        capability.evidence_types[0] if capability.evidence_types else None)
+    parameters = dict(best[2])
+    if capability.name == "core.screenshot":
+        parameters.setdefault("description", requirement[:200])
+    return PlannedTask(id=index, title=requirement[:120], description=requirement, tool=capability.tool, action=capability.name,
+                       parameters=parameters, evidence_required=evidence_type is not None, evidence_type_required=evidence_type,
+                       screenshot_required=screenshot, expected_result=capability.verification,
+                       verification=capability.verification, requirement_refs=[requirement[:300]])
+
+
+# ---------------------------------------------------------------------------- entry point
 def build_ai_plan(
     analysis: AssignmentAnalysis,
     provider: str = "auto",
     model: str | None = None,
+    *,
+    registry: IntegrationRegistry | None = None,
+    config: AgentConfig | None = None,
+    environment: dict[str, Any] | None = None,
+    allowed_targets: set[str] | None = None,
+    llm: LLMProvider | None = None,
 ) -> tuple[ExecutionPlan, str]:
-    registry = build_registry()
-    provider = provider.lower()
-    if provider == "auto":
-        provider = (
-            "openai" if os.environ.get("OPENAI_API_KEY")
-            else "ollama" if os.environ.get("OLLAMA_HOST")
-            else "deterministic"
-        )
-    if provider == "openai":
-        return _openai_plan(analysis, model or "gpt-6-astra", registry), "openai"
-    if provider == "ollama":
-        return _ollama_plan(analysis, model or "qwen2.5:14b", registry), "ollama"
-    if provider == "deterministic":
-        return _deterministic_plan(analysis, registry), "deterministic"
-    raise ValueError("AI provider must be auto, openai, ollama, or deterministic.")
+    config = config or get_config()
+    registry = registry or build_registry(config=config)
+    policy = PolicyEngine(config, allowed_targets)
+    name = resolve_provider_name(provider if provider != "auto" else config.ai.provider if config.ai.provider != "auto" else "auto")
+    if name not in {"deterministic", "openai", "ollama"} and llm is None:
+        raise ValueError("AI provider must be auto, openai, ollama, or deterministic.")
+    if llm is None and name != "deterministic":
+        try:
+            llm = make_provider(name, model, config)
+        except ProviderError:
+            if config.ai.fallback == "none":
+                raise
+            llm = None
+    if llm is not None:
+        try:
+            plan = ai_plan(analysis, llm, registry, policy, environment, attempts=config.ai.max_retries + 1)
+            return plan, llm.name
+        except (ProviderError, ValueError) as exc:
+            if config.ai.fallback == "none":
+                raise
+            plan = deterministic_plan(analysis, registry)
+            plan.planner = f"deterministic (fallback: {exc})"[:500]
+            plan.warnings.append(f"AI planner failed and the deterministic planner was used: {exc}")
+            return plan, "deterministic"
+    plan = deterministic_plan(analysis, registry)
+    validation = validate_plan(plan, registry, policy)
+    plan.warnings = [str(issue) for issue in validation.issues]
+    return plan, "deterministic"
+
+
+# ---------------------------------------------------------------------------- recovery advice
+ADVICE_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "decision": {"type": "string", "enum": ["retry", "replace_parameters", "insert_step", "stop", "ask_human"]},
+        "reason": {"type": "string"},
+        "parameters": {"type": "array", "items": _NAME_VALUE},
+        "step_action": {"type": "string"},
+    },
+    "required": ["decision", "reason", "parameters", "step_action"],
+}
+
+
+def advise_recovery(provider: LLMProvider, registry: IntegrationRegistry, task: PlannedTask, error: str,
+                    observation: dict[str, Any]) -> dict[str, Any]:
+    """Ask the AI what to do after a failed/unverified step; the answer is validated before use."""
+    payload = {
+        "step": {"id": task.id, "title": task.title, "capability": task.action, "parameters": task.parameters,
+                 "expected_result": task.expected_result},
+        "error": error[:3000],
+        "observation": observation,
+        "catalog": registry.catalog()[:20000],
+        "rules": "Only propose parameters declared by the capability or another catalog capability (insert_step). "
+                 "Never widen network scope; ask_human when unsure.",
+    }
+    answer = provider.complete_json("You diagnose failed lab automation steps. Return JSON only.",
+                                    json.dumps(payload, ensure_ascii=False, default=str)[:60000], ADVICE_SCHEMA, name="recovery")
+    parameters = _pairs(answer.get("parameters", []))
+    action = registry.normalize(answer.get("step_action") or task.action)
+    if answer["decision"] in {"replace_parameters", "insert_step"}:
+        if not registry.has(action):
+            return {"decision": "ask_human", "reason": f"AI proposed unknown capability {action}"}
+        problems = registry.validate_parameters(action, parameters)
+        if problems:
+            return {"decision": "ask_human", "reason": "AI proposal invalid: " + "; ".join(problems)}
+    return {"decision": answer["decision"], "reason": answer["reason"], "parameters": parameters, "action": action}
+

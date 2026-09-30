@@ -1,0 +1,14 @@
+name: ftk
+display_name: FTK Imager
+status: executable_profile
+executable_env: LAB_AGENT_FTK_PATH
+window: {title_re: "FTK Imager"}
+launch_wait_seconds: 3
+window_timeout_seconds: 60
+
+operations:
+  launch: []
+
+notes: >
+  The GUI is used for window evidence only. Acquisitions are verified by recomputing the image hashes and
+  comparing them with the MD5/SHA1 values FTK Imager writes into the acquisition log (<image>.txt).
