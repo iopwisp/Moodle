@@ -30,7 +30,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -76,6 +76,7 @@ class Capability:
     requires: tuple[str, ...] = ()  # e.g. ("app:autopsy",)
     network: bool = False
     keywords: tuple[str, ...] = ()
+    interactive: bool = False  # sends real keystrokes/clicks: the user must not touch mouse and keyboard meanwhile
 
     def params(self) -> list[Param]:
         return [_as_param(item) for item in self.parameters]
@@ -319,9 +320,11 @@ class BaseIntegration:
     name: str = ""
     CAPABILITIES: tuple[Capability, ...] = ()
     APPLICATIONS: tuple[AppSpec, ...] = ()
+    INTERACTIVE: frozenset[str] = frozenset()  # capability names that drive the real keyboard/mouse
 
     def capabilities(self) -> list[Capability]:
-        return list(self.CAPABILITIES)
+        return [replace(c, interactive=True) if c.name in self.INTERACTIVE and not c.interactive else c
+                for c in self.CAPABILITIES]
 
     def applications(self) -> list[AppSpec]:
         return list(self.APPLICATIONS)

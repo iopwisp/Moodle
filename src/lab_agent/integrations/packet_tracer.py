@@ -211,6 +211,7 @@ def parse_ping(text: str) -> dict[str, Any] | None:
 class PacketTracerAdapter(BaseIntegration):
     name = "packet_tracer"
     APPLICATIONS = (PT_SPEC,)
+    INTERACTIVE = frozenset({"packet_tracer.open_project", "packet_tracer.add_device", "packet_tracer.connect_devices", "packet_tracer.open_cli", "packet_tracer.enter_command", "packet_tracer.configure_router", "packet_tracer.configure_switch", "packet_tracer.configure_pc", "packet_tracer.verify_connectivity", "packet_tracer.save_project"})
     CAPABILITIES = (
         Capability("packet_tracer.launch", "packet_tracer", "Start Packet Tracer and wait for the main window", (), ("screenshot",),
                    "main window visible (login walls are reported as BLOCKED)", requires=("app:packet_tracer",),

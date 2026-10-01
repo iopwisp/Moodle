@@ -176,13 +176,37 @@ def test_browser_real_session_and_scope(site: str, tmp_path: Path, registry, con
 
 # ---------------------------------------------------------------------------- Burp stand-in
 class FakeBurp(socketserver.ThreadingTCPServer):
+    """Behaves like Burp's proxy: Ctrl+T toggles Intercept, Forward releases the oldest held request,
+    switching Intercept off releases everything that is held."""
+
     daemon_threads = True
     allow_reuse_address = True
 
     def __init__(self) -> None:
         self.intercept = False
-        self.release = threading.Event()
+        self.queue: list[threading.Event] = []
+        self.lock = threading.Lock()
         super().__init__(("127.0.0.1", 0), self._handler())
+
+    def toggle(self) -> None:
+        with self.lock:
+            self.intercept = not self.intercept
+            if not self.intercept:
+                for gate in self.queue:
+                    gate.set()
+                self.queue.clear()
+
+    def forward(self) -> None:
+        with self.lock:
+            if self.queue:
+                self.queue.pop(0).set()
+
+    def release_all(self) -> None:
+        with self.lock:
+            self.intercept = False
+            for gate in self.queue:
+                gate.set()
+            self.queue.clear()
 
     def _handler(self) -> type:
         server = self
@@ -192,8 +216,13 @@ class FakeBurp(socketserver.ThreadingTCPServer):
                 if self.path.startswith("http://burp"):
                     body = b"<html><title>Burp Suite Community Edition</title>Welcome to Burp Suite</html>"
                 else:
-                    if server.intercept:
-                        server.release.wait(30)
+                    gate = None
+                    with server.lock:
+                        if server.intercept:
+                            gate = threading.Event()
+                            server.queue.append(gate)
+                    if gate is not None:
+                        gate.wait(30)
                     body = b"<html>lab target via proxy</html>"
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
@@ -211,8 +240,33 @@ def burp() -> Iterator[FakeBurp]:
     server = FakeBurp()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield server
-    server.release.set()
+    server.release_all()
     server.shutdown()
+
+
+def _fake_burp_app(burp: FakeBurp, tmp_path: Path) -> Any:
+    class FakeApp:
+        profile = {"operations": {"intercept_on": [], "intercept_off": [], "forward": []}}
+
+        def has_operation(self, name: str) -> bool:
+            return name in self.profile["operations"]
+
+        def launch(self, *a: Any, **k: Any) -> None:
+            pass
+
+        def run_operation(self, name: str, variables: Any = None) -> None:
+            if name in {"intercept_on", "intercept_off"}:  # both are the Ctrl+T toggle in the real profile
+                burp.toggle()
+            if name == "forward":
+                burp.forward()
+
+        def running_window(self) -> Any:
+            return FakeWindow("Burp Suite Community Edition")
+
+        def screenshot(self, name: str) -> Path:
+            return fake_screenshot(tmp_path, name=name)
+
+    return FakeApp()
 
 
 def test_burp_proxy_intercept_and_forward(burp: FakeBurp, tmp_path: Path, registry, monkeypatch) -> None:
@@ -226,33 +280,30 @@ def test_burp_proxy_intercept_and_forward(burp: FakeBurp, tmp_path: Path, regist
     with pytest.raises(PermissionError):
         registry.execute("burp.send_request", {"url": "http://example.com/", "port": port}, context)
 
-    class FakeApp:
-        profile = {"operations": {"intercept_on": [], "forward": []}}
-
-        def has_operation(self, name: str) -> bool:
-            return name in self.profile["operations"]
-
-        def launch(self, *a: Any, **k: Any) -> None:
-            pass
-
-        def run_operation(self, name: str, variables: Any = None) -> None:
-            if name == "intercept_on":
-                burp.intercept = True
-            if name == "forward":
-                burp.release.set()
-
-        def running_window(self) -> Any:
-            return FakeWindow("Burp Suite Community Edition")
-
-        def screenshot(self, name: str) -> Path:
-            return fake_screenshot(tmp_path, name=name)
-
-    adapter = registry.adapter("burp")
-    monkeypatch.setattr(adapter, "_app", lambda ctx: FakeApp())
+    monkeypatch.setattr(registry.adapter("burp"), "_app", lambda ctx: _fake_burp_app(burp, tmp_path))
     held = registry.execute("burp.intercept_request", {"url": "http://127.0.0.1:9/admin", "port": port, "hold_seconds": 1}, context)
-    assert held.verified and held.details["held"]
+    assert held.verified and held.details["held"] and held.details["intercept_toggled"]
     forwarded = registry.execute("burp.forward_request", {"timeout": 10}, context)
     assert forwarded.verified and forwarded.details["status"] == 200
+    assert forwarded.details["intercept_off"] and not burp.intercept  # left as a student would leave it
+
+
+def test_burp_intercept_already_on_with_a_queue(burp: FakeBurp, tmp_path: Path, registry, monkeypatch) -> None:
+    """Seen on the real Burp: Intercept left on by an earlier run, the browser's own request queued first."""
+    port = burp.server_address[1]
+    context = ExecutionContext(tmp_path, "web", step_id=1, screenshot_fn=fake_screenshot)
+    burp.toggle()
+    from lab_agent.integrations.burp import PendingRequest
+
+    stale = PendingRequest("http://127.0.0.1:9/favicon.ico", port)
+    stale.run(timeout=30)
+    time.sleep(0.5)
+    monkeypatch.setattr(registry.adapter("burp"), "_app", lambda ctx: _fake_burp_app(burp, tmp_path))
+    held = registry.execute("burp.intercept_request", {"url": "http://127.0.0.1:9/admin", "port": port, "hold_seconds": 1}, context)
+    assert held.verified and not held.details["intercept_toggled"]  # measured as already on: not toggled off
+    forwarded = registry.execute("burp.forward_request", {"timeout": 15}, context)
+    assert forwarded.verified and forwarded.details["forwards"] == 2  # the stale request first, then ours
+    assert forwarded.details["intercept_off"] and not burp.intercept
 
 
 def test_burp_intercept_off_is_detected(burp: FakeBurp, tmp_path: Path, registry, monkeypatch) -> None:

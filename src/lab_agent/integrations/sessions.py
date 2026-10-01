@@ -47,6 +47,9 @@ class BrowserSession:
         launch: dict[str, Any] = {"headless": self.headless}
         if self.proxy:
             launch["proxy"] = {"server": self.proxy}
+            # Chromium sends localhost straight to the server even with a proxy set; lab targets (DVWA, Juice
+            # Shop) usually live on localhost, so loopback must go through Burp too.
+            launch["args"] = ["--proxy-bypass-list=<-loopback>"]
         try:
             self._browser = self._playwright.chromium.launch(**launch)
         except Exception as exc:

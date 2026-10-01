@@ -33,7 +33,9 @@ class LabDevice(BaseIntegration):
         Capability("lab.ping", "lab", "succeeds only with the right peer", (Param("peer", "str", True),), ("file",)),
         Capability("lab.dangerous", "lab", "needs approval", (), ("file",), risk="unsafe"),
         Capability("lab.slow", "lab", "requests pause while running", (), ("file",)),
+        Capability("lab.gui", "lab", "types into an application window", (), ("file",)),
     )
+    INTERACTIVE = frozenset({"lab.gui"})
 
     def __init__(self) -> None:
         self.recovered = False
@@ -68,6 +70,10 @@ class LabDevice(BaseIntegration):
     def dangerous(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         path = context.save_result("dangerous.txt", "done")
         return IntegrationResult(True, {}, [evidence(path, "dangerous", "file")])
+
+    def gui(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        path = context.save_result("gui.txt", "typed")
+        return IntegrationResult(True, {}, [evidence(path, "gui", "file")])
 
     def slow(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         request_control(context.workspace, "PAUSE_REQUESTED")
@@ -281,3 +287,16 @@ def test_unauthorized_network_target_is_blocked_by_policy(tmp_path: Path, config
     state = _run(workspace, registry, config)
     assert state.plan.steps[0].status == TaskStatus.BLOCKED
     assert "not authorized" in state.plan.steps[0].status_reason
+
+
+def test_person_at_the_computer_is_warned_before_keyboard_steps(tmp_path: Path, config, capsys) -> None:
+    steps = [PlannedTask(id=1, title="hash", description="", action="lab.write", parameters={"text": "x"}),
+             PlannedTask(id=2, title="press keys", description="", action="lab.gui")]
+    workspace, registry, _ = _setup(tmp_path, config, steps)
+    state = _run(workspace, registry, config)
+    assert state.status == RunStatus.COMPLETED
+    err = capsys.readouterr().err
+    assert "Steps [2] drive the real keyboard and mouse" in err and "Step 2 (press keys)" in err
+    assert "Step 1 (hash)" not in err
+    events = [e for e in RunDatabase(workspace).events(state.run_id) if e["event_type"] == "attention.required"]
+    assert len(events) == 2

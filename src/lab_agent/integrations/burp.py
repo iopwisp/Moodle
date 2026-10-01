@@ -32,6 +32,7 @@ from .base import (
     IntegrationResult,
     Param,
     evidence,
+    param_bool,
     param_float,
     param_int,
     param_str,
@@ -91,6 +92,7 @@ class PendingRequest:
 class BurpAdapter(BurpNarration, BaseIntegration):
     name = "burp"
     APPLICATIONS = (BURP_SPEC,)
+    INTERACTIVE = frozenset({"burp.launch", "burp.intercept_request", "burp.forward_request", "burp.send_to_repeater"})
     CAPABILITIES = (
         Capability("burp.launch", "burp", "Start Burp Suite (temporary project, default settings) and wait for its window",
                    (PORT,), ("screenshot",), "Burp window visible", requires=("app:burp",), keywords=("burp",)),
@@ -109,8 +111,10 @@ class BurpAdapter(BurpNarration, BaseIntegration):
                    (Param("url", "url", True), PORT, Param("hold_seconds", "float")), ("screenshot", "json"),
                    "request still pending after hold_seconds while Burp window shows it", network=True,
                    keywords=("intercept", "перехват")),
-        Capability("burp.forward_request", "burp", "Forward the held request (profile hotkey) and prove it completes",
-                   (Param("timeout", "float"),), ("json",), "held request completes with an HTTP response"),
+        Capability("burp.forward_request", "burp",
+                   "Forward the held request (profile hotkey), prove it completes, then switch Intercept off again",
+                   (Param("timeout", "float"), Param("keep_intercept", "bool", False, "leave Intercept on afterwards")),
+                   ("json",), "held request completes with an HTTP response; later requests are no longer held"),
         Capability("burp.send_to_repeater", "burp", "Send the selected request to Repeater (profile hotkey) and capture it",
                    (), ("screenshot",), "Repeater tab visible", requires=("app:burp",), keywords=("repeater",)),
         Capability("burp.inspect_response", "burp", "Check the last recorded response for expected status/text",
@@ -159,7 +163,10 @@ class BurpAdapter(BurpNarration, BaseIntegration):
         port = self._port(parameters)
         args = [] if app.running_window() is not None else ["--disable-auto-update"]
         app.launch(args)
-        if app.has_operation("start_temporary_project"):
+        settle = time.monotonic() + 8  # Burp often starts the temporary project by itself
+        while not port_open(port) and time.monotonic() < settle:
+            context.sleep(1)
+        if not port_open(port) and app.has_operation("start_temporary_project"):
             app.run_operation("start_temporary_project")
         deadline = time.monotonic() + param_float(parameters, "timeout", float(app.profile.get("proxy_wait_seconds", 20)))
         while not port_open(port) and time.monotonic() < deadline:
@@ -231,28 +238,49 @@ class BurpAdapter(BurpNarration, BaseIntegration):
                                  [evidence(picture, f"{url} loaded through Burp", "screenshot")],
                                  checks=[{"type": "image_valid", "path": str(picture)}])
 
+    def _held(self, url: str, port: int, wait: float, context: ExecutionContext) -> PendingRequest:
+        """Send a request through the proxy and wait: still pending afterwards means Burp is holding it."""
+        pending = PendingRequest(url, port)
+        pending.run(timeout=300)
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline and pending.result is None and pending.error is None:
+            context.sleep(0.25)
+        return pending
+
+    @staticmethod
+    def _is_held(pending: PendingRequest) -> bool:
+        return pending.result is None and pending.error is None
+
     def intercept_request(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        """Hold a request in Proxy > Intercept.
+
+        Ctrl+T *toggles* interception, and Burp's state is invisible to UI Automation, so the state is measured
+        instead of assumed: the request is sent first; if it goes through, Intercept was off - toggle and send it
+        again. Toggling only after a measurement makes the step safe to repeat.
+        """
         url, port = param_str(parameters, "url"), self._port(parameters)
         self._check_scope(url, context)
         hold = param_float(parameters, "hold_seconds", 4)
         app = self._app(context)
-        if app.has_operation("intercept_on"):
+        self.pending = self._held(url, port, hold, context)
+        toggled = False
+        if not self._is_held(self.pending) and app.has_operation("intercept_on"):
             app.launch()
             app.run_operation("intercept_on")
-        self.pending = PendingRequest(url, port)
-        self.pending.run(timeout=300)
-        context.sleep(hold)
-        held = self.pending.result is None and self.pending.error is None
+            toggled = True
+            self.pending = self._held(url, port, hold, context)
+        held = self._is_held(self.pending)
         items = []
         if app.running_window() is not None:
             picture = app.screenshot(f"burp_intercept_{context.stamp()}.png")
             items.append(evidence(picture, "Burp Proxy > Intercept holding the request", "screenshot"))
         record = context.save_result("burp_intercept.json", {"url": url, "held": held, "hold_seconds": hold,
+                                                             "intercept_toggled": toggled,
                                                              "completed_early": self.pending.result is not None,
                                                              "error": self.pending.error})
         items.append(evidence(record, "Interception measurement", "json"))
         reason = {} if held else {"reason": "The request completed immediately - Intercept is off or the proxy is not Burp"}
-        return IntegrationResult(held, {"url": url, "held": held, **reason}, items,
+        return IntegrationResult(held, {"url": url, "held": held, "intercept_toggled": toggled, **reason}, items,
                                  checks=[{"type": "details_value", "key": "held", "equals": True}])
 
     def forward_request(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
@@ -262,17 +290,39 @@ class BurpAdapter(BurpNarration, BaseIntegration):
         if not app.has_operation("forward"):
             return IntegrationResult.blocked_result("The Burp profile declares no 'forward' operation for this version.")
         app.launch()
-        app.run_operation("forward")
-        timeout = param_float(parameters, "timeout", 30)
-        self.pending.thread.join(timeout)
+        # Forward releases the message shown in Intercept, which is the oldest one held - the browser may have
+        # queued its own requests before ours. Forward until ours goes through (bounded).
+        deadline = time.monotonic() + param_float(parameters, "timeout", 30)
+        forwards = 0
+        while self._is_held(self.pending) and forwards < 10 and time.monotonic() < deadline:
+            app.run_operation("forward")
+            forwards += 1
+            self.pending.thread.join(2)
+        self.pending.thread.join(max(0.0, deadline - time.monotonic()))
         response = self.pending.result
         ok = response is not None
         if response is not None:
             self.last_response = {"url": self.pending.url, **response}
+        intercept_off = None
+        if ok and not param_bool(parameters, "keep_intercept") and app.has_operation("intercept_off"):
+            # Leave Burp as a student would: interception off, so the browser is not stuck on the next request.
+            # measured, not assumed (see intercept_request): a probe that is still held means the toggle went the
+            # other way; toggling again turns Intercept off, and Burp then releases what it was holding
+            for _ in range(2):
+                app.run_operation("intercept_off")
+                probe = self._held(self.pending.url, self.pending.port, 4, context)
+                if not self._is_held(probe):
+                    intercept_off = True
+                    break
+                intercept_off = False
         record = context.save_result("burp_forwarded.json", {"url": self.pending.url, "completed": ok,
-                                                             "response": response, "error": self.pending.error})
-        return IntegrationResult(ok, {"completed": ok, "status": (response or {}).get("status"),
-                                      **({} if ok else {"reason": "Held request did not complete after forwarding"})},
+                                                             "response": response, "error": self.pending.error,
+                                                             "intercept_off": intercept_off})
+        reason = {} if ok else {"reason": "Held request did not complete after forwarding"}
+        if ok and intercept_off is False:
+            ok, reason = False, {"reason": "Forwarded, but Intercept is still on: a test request was held again"}
+        return IntegrationResult(ok, {"completed": response is not None, "status": (response or {}).get("status"),
+                                      "forwards": forwards, "intercept_off": intercept_off, **reason},
                                  [evidence(record, "Forwarded request result", "json")])
 
     def send_to_repeater(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:

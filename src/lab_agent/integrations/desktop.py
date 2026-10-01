@@ -29,6 +29,7 @@ PROFILE = Param("profile", "str", True, "profile name in profiles/, e.g. autopsy
 
 class DesktopAdapter(BaseIntegration):
     name = "desktop"
+    INTERACTIVE = frozenset({"desktop.profile", "desktop.computer_use"})
     CAPABILITIES = (
         Capability("desktop.profile", "desktop", "Run a declared Windows UI Automation operation from an application profile",
                    (PROFILE, Param("operation", "str", False, "operation name in the profile (default launch)"),

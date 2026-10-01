@@ -20,6 +20,7 @@ interrupts waits inside capabilities).  ``execute_workspace`` doubles as
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import uuid
@@ -218,6 +219,12 @@ class Runner:
         self.save()
         self.event("agent.started", {"resume": any(t.attempts for t in self.state.plan.steps),
                                      "capabilities": len(self.registry.capabilities()), "planner": self.state.plan.planner})
+        interactive = [t.id for t in self.state.plan.steps if t.status != TaskStatus.COMPLETED and self.registry.has(t.action)
+                       and self.registry.capability(t.action).interactive]
+        if interactive:
+            self._attention(f"Steps {interactive} drive the real keyboard and mouse (application windows must have focus): "
+                            "leave the computer alone while they run; screenshots themselves do not need it. / Шаги "
+                            f"{interactive} управляют настоящей клавиатурой и мышью: пока они идут, не трогайте компьютер.")
         attempted: set[int] = set()
         try:
             while True:
@@ -320,6 +327,11 @@ class Runner:
                        {"step_id": task.id, "reason": reason, "kind": kind})
         self.save()
 
+    def _attention(self, message: str, step_id: int | None = None) -> None:
+        """Something the person at the computer has to know now (console and dashboard)."""
+        print(f"\n!!! {message}\n", file=sys.stderr, flush=True)
+        self.event("attention.required", {"step_id": step_id, "message": message})
+
     def _invalidate_dependents(self, task: PlannedTask) -> None:
         """A step that completes on resume may change what later steps already summarised.
 
@@ -358,6 +370,11 @@ class Runner:
         self.state.current_step, self.state.current_application = task.id, capability.tool
         self.save()
         self.event("task.started", {"step_id": task.id, "capability": task.action, "title": task.title})
+        if capability.interactive:
+            self._attention(f"Step {task.id} ({task.title}) types into the {capability.tool} window now - "
+                            f"do not touch the mouse or keyboard until it finishes. / Шаг {task.id}: агент нажимает "
+                            "клавиши в окне программы - не трогайте мышь и клавиатуру, пока шаг не закончится.",
+                            task.id)
         if self.config.screenshots.mode == "all":
             self._screenshot(task, "before")
 

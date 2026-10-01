@@ -23,8 +23,16 @@ operations:
   # Burp is a Java Swing application: UI Automation needs the Java Access Bridge
   # (run `jabswitch -enable` with Burp's bundled JRE once). Keyboard shortcuts below
   # are Burp defaults; adjust them in Settings > User interface > Hotkeys if changed.
+  # Start-up wizard (Temporary project -> Next -> Use Burp defaults -> Start Burp). The wizard is Swing and
+  # invisible to UI Automation, but its default buttons answer Enter. Run only while the proxy is not up yet.
+  # Verified on Burp Suite Community 2026.8: the proxy listens about a second after the second Enter.
   start_temporary_project:
-    - {type: wait, seconds: 2}
+    - {type: focus_window}
+    - {type: wait, seconds: 1}
+    - {type: hotkey, keys: "{{ENTER}}"}  # {{ }} escapes the template braces
+    - {type: wait, seconds: 3}
+    - {type: focus_window}
+    - {type: hotkey, keys: "{{ENTER}}"}  # {{ }} escapes the template braces
   intercept_on:
     - {type: focus_window}
     - {type: hotkey, keys: "^+p"}
@@ -34,6 +42,11 @@ operations:
     - {type: focus_window}
     - {type: hotkey, keys: "^f"}
     - {type: wait, seconds: 1}
+  intercept_off:
+    - {type: focus_window}
+    - {type: hotkey, keys: "^+p"}
+    - {type: wait, seconds: 1}
+    - {type: hotkey, keys: "^t"}
   send_to_repeater:
     - {type: focus_window}
     - {type: hotkey, keys: "^r"}
