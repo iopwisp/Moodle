@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..tools.process import run_command
+from .autopsy_story import AutopsyNarration
 from .base import (
     AppSpec,
     BaseIntegration,
@@ -88,7 +89,7 @@ def case_summary(case_dir: Path) -> dict[str, Any]:
     return summary
 
 
-class AutopsyAdapter(BaseIntegration):
+class AutopsyAdapter(AutopsyNarration, BaseIntegration):
     name = "autopsy"
     APPLICATIONS = (AUTOPSY_SPEC,)
     CAPABILITIES = (

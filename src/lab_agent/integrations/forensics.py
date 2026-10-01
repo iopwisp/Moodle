@@ -42,6 +42,7 @@ from .base import (
     param_list,
     param_str,
 )
+from .forensics_story import ForensicsNarration
 
 IMAGE_EXTENSIONS = {".dd", ".raw", ".img", ".001", ".e01", ".vmdk", ".vhd", ".bin"}
 
@@ -164,7 +165,7 @@ def _eocd_end(data: bytes, start: int = 0) -> int | None:
     return index + 22 + comment_length
 
 
-class ForensicsAdapter(BaseIntegration):
+class ForensicsAdapter(ForensicsNarration, BaseIntegration):
     name = "forensics"
     APPLICATIONS = (
         AppSpec("foremost", "Foremost", env_var="LAB_AGENT_FOREMOST_PATH", executables=("foremost", "foremost.exe"),
@@ -639,7 +640,9 @@ class ForensicsAdapter(BaseIntegration):
                 row[tool] = entry["found_by"].get(tool, 0)
             missing = [tool for tool in tools if not entry["found_by"].get(tool)]
             duplicates = [tool for tool, count in entry["found_by"].items() if count > 1]
-            row["explanation"] = ("found by all tools" if not missing else f"not found by {', '.join(missing)}") + (
+            agreement = ("only one tool produced output" if len(tools) == 1 else
+                         "found by all tools" if not missing else f"not found by {', '.join(missing)}")
+            row["explanation"] = agreement + (
                 f"; duplicates in {', '.join(duplicates)}" if duplicates else "")
             row["files"] = "; ".join(entry["names"])
             rows.append(row)
@@ -874,8 +877,10 @@ class ForensicsAdapter(BaseIntegration):
                                     "output": "scalpel_output", **({"config": config} if config else {})},
                                    depends_on=[s_copy], evidence_type="log",
                                    requirement="Настройка и запуск Scalpel"))
-        s_rec = add("Hash all recovered files", "forensics.hash_directory", {}, depends_on=[carve_steps[0]], evidence_type="csv",
-                    requirement="SHA-256 восстановленных файлов")
+        # The reference carver is enough to hash and compare; the external carvers are waited for (in any
+        # outcome) so that their files are included, and a later resume rebuilds both lists.
+        s_rec = add("Hash all recovered files", "forensics.hash_directory", {}, depends_on=[carve_steps[0]],
+                    run_after=carve_steps[1:], evidence_type="csv", requirement="SHA-256 восстановленных файлов")
         add("Compare carving results between tools", "forensics.compare_results", {}, depends_on=[s_rec], evidence_type="csv",
             requirement="Сравнение результатов Foremost, Scalpel и Autopsy")
         offsets = re.findall(r"0x00?([0-9a-f]{6,8})", corpus)

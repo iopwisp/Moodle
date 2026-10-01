@@ -249,7 +249,7 @@ class Runner:
         self.db.finish_run(self.state.run_id or "", str(self.state.status))
         if generate_report:
             try:
-                reports = generate_reports(self.workspace)
+                reports = generate_reports(self.workspace, self.registry)
                 self.event("report.completed", reports)
             except Exception as exc:  # noqa: BLE001 - report failure must not hide the run result
                 self.db.record_error(self.state.run_id or "", None, "report", str(exc))
@@ -309,6 +309,7 @@ class Runner:
                 self.state.completed_steps.append(task.id)
             self.state.errors = [e for e in self.state.errors if e.get("step_id") != task.id]
             self.event("task.completed", {"step_id": task.id, "capability": task.action})
+            self._invalidate_dependents(task)
         else:
             if task.id in self.state.completed_steps:
                 self.state.completed_steps.remove(task.id)
@@ -318,6 +319,22 @@ class Runner:
             self.event("task.blocked" if status == TaskStatus.BLOCKED else "task.failed",
                        {"step_id": task.id, "reason": reason, "kind": kind})
         self.save()
+
+    def _invalidate_dependents(self, task: PlannedTask) -> None:
+        """A step that completes on resume may change what later steps already summarised.
+
+        Example: hashing ran while Foremost was BLOCKED; once Foremost completes, the hash list and the
+        tool comparison must be rebuilt.  Steps confirmed by the student are never reset.
+        """
+        for other in self.state.plan.steps:
+            if (other.status == TaskStatus.COMPLETED and task.id in (*other.depends_on, *other.run_after)
+                    and other.finished_at is not None and task.finished_at is not None and other.finished_at < task.finished_at
+                    and not other.status_reason.startswith("manually verified")):
+                other.status = TaskStatus.PENDING
+                other.status_reason = f"step {task.id} produced new results; running again"
+                if other.id in self.state.completed_steps:
+                    self.state.completed_steps.remove(other.id)
+                self.event("task.invalidated", {"step_id": other.id, "because_of": task.id})
 
     def _execute_task(self, task: PlannedTask) -> None:
         problem = self._dependency_problem(task)
@@ -416,6 +433,7 @@ class Runner:
             if kind in {FailureKind.POLICY}:
                 return "BLOCKED", f"{type(exc).__name__}: {exc}", kind, None
             return "FAILED", f"{type(exc).__name__}: {exc}", kind, None
+        task.result_details = _trimmed(result.details)
         if result.blocked:
             return "BLOCKED", result.reason or "capability reported BLOCKED", FailureKind.BLOCKED, result
         registered, evidence_errors = self._register(task, result)
@@ -511,6 +529,19 @@ class Runner:
         except Exception as exc:  # noqa: BLE001 - screenshots are best effort unless required
             LOG.debug("screenshot failed: %s", exc)
             return None
+
+
+def _trimmed(value: Any, depth: int = 0) -> Any:
+    """Adapter details small enough for the checkpoint: long text, deep nesting and long lists are cut."""
+    if isinstance(value, str):
+        return value if len(value) <= 4000 else value[:2000] + "\n...\n" + value[-1500:]
+    if isinstance(value, dict):
+        return {str(k): _trimmed(v, depth + 1) for k, v in list(value.items())[:200]} if depth < 5 else "..."
+    if isinstance(value, list | tuple):
+        return [_trimmed(v, depth + 1) for v in list(value)[:200]] if depth < 5 else "..."
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    return str(value)
 
 
 def execute_workspace(

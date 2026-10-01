@@ -27,6 +27,7 @@ from .base import (
     param_str,
 )
 from .sessions import BrowserSession
+from .web_story import BrowserNarration
 
 URL = Param("url", "url", True, "http(s) URL on localhost or an authorized host")
 SELECTOR = Param("selector", "str", True, "Playwright/CSS selector, e.g. '#login' or 'text=Submit'")
@@ -38,7 +39,7 @@ def _cap(name: str, description: str, params: tuple[Param, ...] = (), evidence_t
                       network=network, keywords=("browser", "браузер", "http://", "https://", "web", "сайт"))
 
 
-class BrowserAdapter(BaseIntegration):
+class BrowserAdapter(BrowserNarration, BaseIntegration):
     name = "browser"
     CAPABILITIES = (
         _cap("launch", "Start the browser session (headed by default)", (Param("headless", "bool"), Param("proxy", "str")), (),

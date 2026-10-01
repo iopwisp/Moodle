@@ -241,6 +241,50 @@ class IntegrationResult:
         return cls(verified=False, details={"reason": reason, **details})
 
 
+@dataclass
+class StepFacts:
+    """What actually happened in one plan step, as handed to :meth:`BaseIntegration.narrate`."""
+
+    action: str
+    title: str
+    status: str  # COMPLETED | FAILED | BLOCKED | SKIPPED | PENDING
+    parameters: dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
+    reason: str = ""
+    requirement_refs: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)  # workspace-relative paths
+    sections: list[dict[str, Any]] = field(default_factory=list)  # adapter report_sections
+    workspace: Path | None = None
+
+    @property
+    def completed(self) -> bool:
+        return self.status == "COMPLETED"
+
+    def section_rows(self, index: int = 0) -> list[dict[str, Any]]:
+        tables = [s.get("table") or [] for s in self.sections if s.get("table")]
+        return list(tables[index]) if index < len(tables) else []
+
+
+@dataclass
+class Narrative:
+    """How a step reads in the student report: a heading and plain prose, no tool jargon.
+
+    ``tables`` replaces the adapter's report-section tables (``None`` keeps them, ``[]`` drops them);
+    each entry is ``{"caption": str, "rows": list[dict]}``.  ``finding`` is one sentence for the
+    conclusion; leave it empty when the step established nothing worth concluding.
+    """
+
+    heading: str
+    paragraphs: list[str] = field(default_factory=list)
+    finding: str = ""
+    tables: list[dict[str, Any]] | None = None
+    figure_caption: str = ""
+    show_code: bool = True
+    show_figures: bool = True
+    outcome_explained: bool = False  # True: the paragraphs already explain why an unfinished step did not finish
+    software: list[tuple[str, str]] = field(default_factory=list)  # (program, version) actually used by the step
+
+
 class CapabilityBlocked(RuntimeError):
     """Raised when a capability cannot run here (missing app, credential, login...)."""
 
@@ -299,6 +343,16 @@ class BaseIntegration:
 
     def shutdown(self) -> None:
         """Release resources opened during a run."""
+
+    def narrate(self, facts: StepFacts, language: str) -> Narrative | None:
+        """Describe a finished step for the student report (``language`` is ``"ru"`` or ``"en"``).
+
+        Dispatches to ``narrate_<action>(facts, language)`` when the integration defines it; ``None``
+        lets the report fall back to a generic description built from the step's facts.
+        """
+        method = getattr(self, "narrate_" + facts.action.split(".", 1)[-1], None)
+        result: Narrative | None = method(facts, language) if callable(method) else None
+        return result
 
 
 def param_str(parameters: dict[str, Any], name: str, default: str = "") -> str:

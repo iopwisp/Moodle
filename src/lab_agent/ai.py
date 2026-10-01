@@ -13,6 +13,7 @@ the fallback is recorded), unless ``ai.fallback: none``.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .config import AgentConfig, get_config
@@ -161,6 +162,25 @@ def _score(capability: Any, text: str) -> float:
     return float(sum(1 for keyword in capability.keywords if keyword.lower() in text))
 
 
+QUESTION_RE = re.compile(
+    r"\?\s*$|^\W*(что|как|почему|зачем|какой|какая|какие|каким|какую|в\s+ч[её]м|чем|сколько|объясните|опишите|сравните|"
+    r"докажите|поясните|what|why|how|which|when|explain|describe|compare|discuss)\b", re.IGNORECASE)
+
+
+def is_question(requirement: str) -> bool:
+    """Theory the student answers in writing - never an action for a tool, whatever keywords it contains."""
+    return bool(QUESTION_RE.search(requirement.strip()))
+
+
+def _answers_task(index: int, questions: list[str], language_hint: str) -> PlannedTask:
+    russian = bool(re.search(r"[А-Яа-яЁё]", language_hint))
+    return PlannedTask(
+        id=index, title="Ответы на вопросы" if russian else "Answers to the questions",
+        description="\n".join(questions), tool="core", action="core.manual_review",
+        parameters={"reason": "The analytical questions require the student's own written answers; the agent does not write them."},
+        requirement_refs=[q[:300] for q in questions[:60]])
+
+
 def deterministic_plan(analysis: AssignmentAnalysis, registry: IntegrationRegistry) -> ExecutionPlan:
     """Adapter workflow templates first; otherwise match each requirement to a capability by keywords."""
     templated: list[dict[str, Any]] = []
@@ -188,8 +208,13 @@ def deterministic_plan(analysis: AssignmentAnalysis, registry: IntegrationRegist
                 requirement_refs=[step["requirement"]] if step.get("requirement") else [],
             ))
     else:
-        for index, requirement in enumerate(analysis.requirements or [analysis.objective], start=1):
+        actions = [r for r in analysis.requirements if not is_question(r)] or ([] if analysis.requirements else [analysis.objective])
+        for index, requirement in enumerate(actions, start=1):
             tasks.append(_match_requirement(index, requirement, analysis, registry))
+    questions = list(dict.fromkeys([*analysis.questions, *(r for r in analysis.requirements if is_question(r))]))
+    if questions and not any(t.action == "core.manual_review" and "answers" in str(t.parameters.get("reason", "")).lower()
+                             for t in tasks):
+        tasks.append(_answers_task(len(tasks) + 1, questions, analysis.title or analysis.objective))
     plan = ExecutionPlan(assignment=analysis.assignment, objective=analysis.title or analysis.objective, steps=tasks,
                          source_files=analysis.source_files, planner="deterministic")
     return normalize_plan(plan, registry)

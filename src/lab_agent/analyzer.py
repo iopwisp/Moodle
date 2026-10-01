@@ -261,7 +261,8 @@ def analyze(paths: list[Path]) -> AssignmentAnalysis:
     title_source = next((text for key, text in extracted.items()
                          if any(f.role == "assignment" and (f.path == key or key.endswith(f.path)) for f in collector.files)), corpus)
     title = next((line.strip().lstrip("# ") for line in title_source.splitlines() if len(line.strip()) > 10), "")
-    objective = next((line.strip().lstrip("# ") for line in lines if len(line.strip()) > 20), "Review the supplied assignment materials")
+    objective = extract_objective(title_source.splitlines()) or extract_objective(lines) or next(
+        (line.strip().lstrip("# ") for line in lines if len(line.strip()) > 20), "Review the supplied assignment materials")
     if any(value.startswith("[Extraction failed:") for value in extracted.values()):
         limitations.append("At least one file could not be extracted; inspect the analysis JSON before execution.")
     suspicious = [f for f in collector.files if f.role == "suspicious"]
@@ -278,6 +279,43 @@ def analyze(paths: list[Path]) -> AssignmentAnalysis:
         urls=list(dict.fromkeys(u.rstrip(".,;") for u in URL_RE.findall(corpus)))[:40], hashes=collector.hashes,
         questions=questions[:60],
     )
+
+
+OBJECTIVE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?(?:#+\s*)?(цел[ьи](?:\s+(?:лабораторной\s+)?работы)?|objectives?|goals?|aims?|purpose)"
+                          r"\s*[:.\-–—]?\s*(.*)$", re.IGNORECASE)
+SECTION_START_RE = re.compile(r"^\s*(?:#+\s*)?(?:часть|раздел|задани|ход\s|порядок|теор|практ|оборудован|материал|требован|"
+                              r"исходн|сценари|кейс|легенд|введени|part\b|section|task|procedure|theory|equipment|materials|"
+                              r"requirements|deliverables|scenario|background|introduction|case\b)", re.IGNORECASE)
+LEADING_SYMBOLS_RE = re.compile(r"^[^\w«\"(]+")
+
+
+def extract_objective(lines: list[str]) -> str:
+    """The text of the "Objective" / "Цель работы" section, joined into one sentence-like string."""
+    for index, line in enumerate(lines):
+        match = OBJECTIVE_RE.match(line)
+        if not match or len(line.strip()) > 400:
+            continue
+        parts = [match.group(2).strip()] if match.group(2).strip() else []
+        numbered = False
+        for following in lines[index + 1:index + 12]:
+            text = following.strip()
+            if not text:
+                if parts:
+                    break
+                continue
+            words = LEADING_SYMBOLS_RE.sub("", text)  # emoji or bullets in front of a heading
+            if SECTION_START_RE.match(words) or OBJECTIVE_RE.match(words):
+                break
+            item = bool(NUMBERED_RE.match(text))
+            if numbered and not item:  # the numbered list of goals has ended
+                break
+            numbered = numbered or item
+            parts.append(NUMBERED_RE.sub("", text).strip(" \t-*•"))
+        parts = [p.rstrip(".;") for p in parts if p]
+        parts = parts[:1] + [p[0].lower() + p[1:] if len(p) > 1 and p[1].islower() else p for p in parts[1:]]
+        if parts:
+            return "; ".join(parts)[:600] + "."
+    return ""
 
 
 def build_plan(analysis: AssignmentAnalysis) -> ExecutionPlan:

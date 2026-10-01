@@ -94,7 +94,10 @@ class ReportConfig(BaseModel):
     case_id: str = ""
     course: str = ""
     instructor: str = ""
-    language: Literal["en", "ru"] = "en"
+    university: str = ""
+    department: str = ""
+    city: str = ""
+    language: Literal["auto", "en", "ru"] = "auto"  # auto: the language of the assignment text
 
 
 class PluginConfig(BaseModel):

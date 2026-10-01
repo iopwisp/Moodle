@@ -29,21 +29,31 @@ def test_report_is_submission_oriented_and_honest(tmp_path: Path, config, regist
     config.report.group = "CS-2435"
     workspace, state, _ = _run_small(tmp_path, config, registry, "1. Calculate SHA256 hash\n2. Take a screenshot\n3. Write an essay\n")
     from docx import Document
-
-    document = Document(str(workspace / "reports" / f"{state.assignment}_Report.docx"))
-    text = "\n".join(p.text for p in document.paragraphs)
-    cells = "\n".join(c.text for t in document.tables for r in t.rows for c in r.cells)
-    for heading in ("1. Objective", "2. Environment", "3. Input materials", "5. Execution and results", "6. Requirement mapping",
-                    "7. Evidence register", "9. Conclusion", "Limitations", "Appendix A"):
-        assert heading in text, heading
-    assert "Test Student" in cells and "CS-2435" in cells
-    assert "3. Write an essay - BLOCKED" in text
-    assert "Step 3 (Write an essay) is BLOCKED" in text
-    assert len(document.inline_shapes) >= 1  # the screenshot of step 2 is embedded
     from pypdf import PdfReader
 
+    # Technical audit: every status, check and the requirement mapping.
+    audit = Document(str(workspace / "reports" / f"{state.assignment}_Audit.docx"))
+    audit_text = "\n".join(p.text for p in audit.paragraphs)
+    for heading in ("1. Objective", "2. Environment", "3. Input materials", "5. Execution and results", "6. Requirement mapping",
+                    "7. Evidence register", "9. Conclusion", "Limitations", "Appendix A"):
+        assert heading in audit_text, heading
+    assert "3. Write an essay - BLOCKED" in audit_text and "Step 3 (Write an essay) is BLOCKED" in audit_text
+    audit_pdf = "\n".join(page.extract_text() for page in PdfReader(str(workspace / "reports" / f"{state.assignment}_Audit.pdf")).pages)
+    assert "Requirement mapping" in audit_pdf and "BLOCKED" in audit_pdf
+
+    # Student report: title page, plain prose in the assignment's language, honest about what is missing.
+    document = Document(str(workspace / "reports" / f"{state.assignment}_Report.docx"))
+    text = "\n".join(p.text for p in document.paragraphs)
+    assert "LABORATORY REPORT" in text and "Student: Test Student, group CS-2435" in text
+    for heading in ("Procedure and results", "Conclusion", "Appendix B. Commands"):
+        assert heading in text, heading
+    for jargon in ("BLOCKED", "COMPLETED", "core.", "checks passed"):
+        assert jargon not in text, jargon
+    assert "This step could not be carried out: it cannot be automated and has to be done by hand." in text
+    assert "Not completed: “Write an essay”." in text
+    assert len(document.inline_shapes) >= 1  # the screenshot of step 2 is embedded
     pdf_text = "\n".join(page.extract_text() for page in PdfReader(str(workspace / "reports" / f"{state.assignment}_Report.pdf")).pages)
-    assert "Requirement mapping" in pdf_text and "BLOCKED" in pdf_text
+    assert "Procedure and results" in pdf_text and "BLOCKED" not in pdf_text
 
 
 def test_web_dashboard_status_events_controls_and_files(tmp_path: Path, config, registry) -> None:

@@ -1,4 +1,9 @@
-"""Submission-oriented DOCX and PDF reports built only from recorded results.
+"""Technical audit report (DOCX/PDF) built only from recorded results.
+
+The document a student hands in is written by :mod:`lab_agent.student_report`;
+this one is the full record behind it: every step with its capability and
+parameters, verification checks, requirement mapping, evidence register with
+hashes, errors and recoveries.
 
 Both formats render the same :class:`ReportModel`, assembled from the
 checkpoint, the evidence registry, the input manifest, environment discovery
@@ -97,7 +102,7 @@ def _state(workspace: Path) -> RunState:
 def _output_paths(workspace: Path, state: RunState) -> tuple[Path, Path]:
     folder = workspace / "reports"
     folder.mkdir(parents=True, exist_ok=True)
-    return folder / f"{state.assignment}_Report.docx", folder / f"{state.assignment}_Report.pdf"
+    return folder / f"{state.assignment}_Audit.docx", folder / f"{state.assignment}_Audit.pdf"
 
 
 def _valid_image(path: Path) -> bool:
@@ -436,7 +441,10 @@ def generate_pdf_report(workspace: Path) -> Path:
     return output
 
 
-def generate_reports(workspace: Path) -> dict[str, str]:
-    docx = generate_report(workspace)
-    pdf = generate_pdf_report(workspace)
-    return {"docx": str(docx), "pdf": str(pdf)}
+def generate_reports(workspace: Path, registry: Any = None) -> dict[str, str]:
+    """The student report (``<A>_Report``) and the technical audit (``<A>_Audit``), both as DOCX and PDF."""
+    from .student_report import generate_student_report
+
+    audit_docx = generate_report(workspace)
+    audit_pdf = generate_pdf_report(workspace)
+    return {**generate_student_report(workspace, registry), "audit_docx": str(audit_docx), "audit_pdf": str(audit_pdf)}

@@ -89,6 +89,7 @@ class PlannedTask(BaseModel):
     report_sections: list[dict[str, Any]] = Field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    result_details: dict[str, Any] = Field(default_factory=dict)  # trimmed adapter details, for the report
 
     @property
     def capability(self) -> str:

@@ -211,9 +211,24 @@ def test_assignment3_style_pipeline_end_to_end(tmp_path: Path, config, registry)
     assert report_docx.is_file() and report_pdf.is_file()
     from docx import Document
 
-    text = "\n".join(p.text for p in Document(str(report_docx)).paragraphs)
-    assert "BLOCKED" in text and "SOURCE_UNCHANGED" in "\n".join(
-        c.text for t in Document(str(report_docx)).tables for r in t.rows for c in r.cells) + text
+    # The technical audit keeps the raw statuses and verification results ...
+    audit = Document(str(workspace / "reports" / f"{state.assignment}_Audit.docx"))
+    audit_text = "\n".join(p.text for p in audit.paragraphs)
+    assert "BLOCKED" in audit_text and "SOURCE_UNCHANGED" in "\n".join(
+        c.text for t in audit.tables for r in t.rows for c in r.cells) + audit_text
+    # ... the student report is plain Russian prose built from the same facts.
+    report = Document(str(report_docx))
+    text = "\n".join(p.text for p in report.paragraphs)
+    for heading in ("Цель работы", "Исходные данные", "Ход работы", "Вывод"):
+        assert heading in text, heading
+    assert "Освоить работу с шестнадцатеричными" in text  # the real objective, not the title
+    for jargon in ("forensics.", "COMPLETED", "BLOCKED", "checks passed", "{\""):
+        assert jargon not in text, jargon
+    assert "Ручная сборка фрагментированного ZIP" in text and "50 4B 03 04" in text
+    assert "Ответы на вопросы этого раздела ещё не подготовлены" in text  # honest about the missing answers
+    conclusion = text[text.index("Вывод"):]
+    assert "Не завершено:" in conclusion and "«Карвинг в Foremost»" in conclusion and "ответы на вопросы" in conclusion
+    assert "программа Autopsy не установлена на этом компьютере" in text
     assert load_state(workspace).status == state.status
 
 

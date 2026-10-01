@@ -239,6 +239,28 @@ def test_resume_reconciles_interrupted_step_and_detects_tampering(tmp_path: Path
     assert state.status == RunStatus.COMPLETED
 
 
+def test_step_completed_on_resume_reruns_steps_that_summarised_it(tmp_path: Path, config) -> None:
+    steps = [PlannedTask(id=1, title="tool", description="", action="lab.ping", parameters={"peer": "10.9.9.9"}, required=False),
+             PlannedTask(id=2, title="summary", description="", action="lab.write", parameters={"text": "s", "name": "s.txt"},
+                         run_after=[1]),
+             PlannedTask(id=3, title="student", description="", action="lab.write", parameters={"text": "m", "name": "m.txt"},
+                         run_after=[1])]
+    workspace, registry, device = _setup(tmp_path, config, steps)
+    state = _run(workspace, registry, config)
+    assert [t.status for t in state.plan.steps] == [TaskStatus.FAILED, TaskStatus.COMPLETED, TaskStatus.COMPLETED]
+    # the tool becomes usable (e.g. installed) and the student confirmed step 3 by hand in the meantime
+    state.plan.steps[0].parameters["peer"] = "10.0.0.2"
+    state.plan.steps[2].status_reason = "manually verified: written by the student"
+    save_state(workspace, state)
+    device.calls.clear()
+    state = _run(workspace, registry, config)
+    assert [t.status for t in state.plan.steps] == [TaskStatus.COMPLETED] * 3
+    assert device.calls == ["write"]  # the summary ran again, the student's step did not
+    assert state.plan.steps[2].status_reason.startswith("manually verified")
+    events = [e["event_type"] for e in RunDatabase(workspace).events(state.run_id)]
+    assert "task.invalidated" in events
+
+
 def test_unknown_capability_fails(tmp_path: Path, config) -> None:
     workspace, registry, _ = _setup(tmp_path, config, [PlannedTask(id=1, title="x", description="", action="nope.nothing")])
     state = _run(workspace, registry, config)

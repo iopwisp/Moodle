@@ -54,8 +54,10 @@ def test_requirement_matching_without_templates(tmp_path: Path, registry) -> Non
     source.write_text("1. Calculate SHA256 hash of the inputs\n2. Take a screenshot of the result\n3. Discuss the ethics\n"
                       "4. Open http://localhost:8000/login in the browser\n", encoding="utf-8")
     plan = deterministic_plan(analyze([source]), registry)
-    assert [t.action for t in plan.steps] == ["core.hash_inputs", "core.screenshot", "core.manual_review", "browser.visit"]
-    assert plan.steps[1].screenshot_required and plan.steps[3].parameters == {"url": "http://localhost:8000/login"}
+    # "Discuss ..." is theory for the student: it joins the single answers step at the end instead of a tool step
+    assert [t.action for t in plan.steps] == ["core.hash_inputs", "core.screenshot", "browser.visit", "core.manual_review"]
+    assert plan.steps[-1].requirement_refs == ["Discuss the ethics"]
+    assert plan.steps[1].screenshot_required and plan.steps[2].parameters == {"url": "http://localhost:8000/login"}
 
 
 def test_ai_plan_is_validated_and_mapped(tmp_path: Path, registry, config) -> None:

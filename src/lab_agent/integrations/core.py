@@ -15,7 +15,9 @@ from .base import (
     Capability,
     ExecutionContext,
     IntegrationResult,
+    Narrative,
     Param,
+    StepFacts,
     evidence,
     param_str,
 )
@@ -145,6 +147,42 @@ class CoreAdapter(BaseIntegration):
 
     def manual_review(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         return IntegrationResult.blocked_result(param_str(parameters, "reason") or "Manual verification required")
+
+    # ------------------------------------------------------------------ report text
+    def narrate_hash_inputs(self, facts: StepFacts, language: str) -> Narrative:
+        n = int(facts.details.get("count") or 0)
+        if language == "ru":
+            return Narrative("Контрольные суммы исходных файлов", [
+                f"Для всех выданных файлов ({n}) вычислили MD5, SHA-1 и SHA-256; значения сохранены в input_hashes.csv."])
+        files = "the input file" if n == 1 else f"all {n} input files"
+        return Narrative("Hashes of the input files", [f"MD5, SHA-1 and SHA-256 were computed for {files} (input_hashes.csv)."])
+
+    def narrate_hash_file(self, facts: StepFacts, language: str) -> Narrative:
+        d = facts.details
+        file = str(d.get("file") or facts.parameters.get("path")).rsplit("/", 1)[-1]
+        if language == "ru":
+            return Narrative(f"Хеш файла {file}", [f"SHA-256 файла {file}: {d.get('sha256', '')}."])
+        return Narrative(f"Hash of {file}", [f"The SHA-256 of {file} is {d.get('sha256', '')}."])
+
+    def narrate_verify_hash(self, facts: StepFacts, language: str) -> Narrative:
+        d = facts.details
+        file = str(d.get("file") or facts.parameters.get("path")).rsplit("/", 1)[-1]
+        if language == "ru":
+            text = f"Хеш файла {file} сравнили с контрольным значением: " + (
+                f"значения совпадают ({d.get('actual', '')})." if d.get("match") else "значения различаются.")
+            return Narrative(f"Проверка контрольной суммы {file}", [text],
+                             finding=f"Контрольная сумма {file} совпадает с заявленной." if d.get("match") else "")
+        return Narrative(f"Checksum of {file}", [f"The hash of {file} " + ("matches the reference." if d.get("match") else "does not match.")])
+
+    def narrate_screenshot(self, facts: StepFacts, language: str) -> Narrative:
+        caption = str(facts.parameters.get("description") or "")
+        if language == "ru":
+            return Narrative(caption or "Снимок экрана", [], figure_caption=caption or "Снимок экрана")
+        return Narrative(caption or "Screenshot", [], figure_caption=caption or "Screenshot")
+
+    def narrate_manual_review(self, facts: StepFacts, language: str) -> Narrative:
+        # The student's own text (attached with `lab-agent complete-step --attach`) is rendered by the report itself.
+        return Narrative(facts.title if not facts.requirement_refs else facts.requirement_refs[0], [])
 
 
 def create_adapters(services: Any) -> list[CoreAdapter]:

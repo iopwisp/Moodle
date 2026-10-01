@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -108,6 +109,9 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("workspace")
     p.add_argument("step_id", type=int)
     p.add_argument("--verification", required=True, help="Describe what was observed to verify completion")
+    p.add_argument("--attach", type=Path, action="append", default=[],
+                   help="File produced by hand (e.g. answers.md); copied to results/ and registered for this step. "
+                        "Markdown is rendered into the report.")
     p = sub.add_parser("hash", help="Calculate MD5, SHA1, and SHA256 for a file")
     p.add_argument("file", type=Path)
     p = sub.add_parser("files", help="List files under a workspace-relative path")
@@ -246,6 +250,16 @@ def main(argv: list[str] | None = None) -> int:
             task = next((t for t in state.plan.steps if t.id == args.step_id), None)
             if task is None:
                 raise ValueError(f"Unknown step id: {args.step_id}")
+            for attachment in args.attach:
+                source = attachment.resolve()
+                if not source.is_file():
+                    raise FileNotFoundError(source)
+                target = workspace / "results" / source.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if source != target.resolve():
+                    shutil.copy2(source, target)
+                register_evidence(workspace, target, f"Attached by the student: {source.name}",
+                                  "file", task.id, capability=task.action, requirement_refs=task.requirement_refs)
             if task.evidence_required:
                 checks = {c["id"]: c for c in validate_evidence(workspace)}
                 ok = [item for item in list_evidence(workspace) if item.step_id == task.id and checks.get(item.id, {}).get("verified")

@@ -36,6 +36,7 @@ from .base import (
     param_int,
     param_str,
 )
+from .web_story import BurpNarration
 
 BURP_SPEC = AppSpec(
     "burp", "Burp Suite", env_var="LAB_AGENT_BURP_PATH",
@@ -87,7 +88,7 @@ class PendingRequest:
         self.thread.start()
 
 
-class BurpAdapter(BaseIntegration):
+class BurpAdapter(BurpNarration, BaseIntegration):
     name = "burp"
     APPLICATIONS = (BURP_SPEC,)
     CAPABILITIES = (
