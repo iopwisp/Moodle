@@ -242,9 +242,23 @@ def analyze(paths: list[Path]) -> AssignmentAnalysis:
     lines = [line.rstrip() for line in corpus.splitlines()]
     lower = corpus.lower()
 
-    req_lines = [NUMBERED_RE.sub("", line).strip(" \t-*•") for line in lines if NUMBERED_RE.match(line) and len(line.strip()) > 3]
-    if not req_lines:
-        req_lines = [line.strip() for line in lines if len(line.strip()) > 20][:30]
+    # An assignment with explicit sub-task structure ("Task 3.1", "Задача 2.1", ...) is a handful of tasks, not
+    # one requirement per prose bullet: keep one line per dotted task number so the plan mirrors the real tasks
+    # instead of exploding every background/objective/appendix bullet into a step.
+    dotted_tasks: dict[str, str] = {}
+    for line in lines:
+        match = STEP_RE.match(line)
+        if match and match.group(1) and "." in match.group(1):
+            title = re.sub(r"^[\s—–:.)\-]+", "", match.group(2)).strip().rstrip(",;")
+            if len(title) >= 8:
+                dotted_tasks.setdefault(match.group(1), f"Task {match.group(1)}: {title}")
+    if len(dotted_tasks) >= 2:
+        req_lines = list(dotted_tasks.values())
+    else:
+        req_lines = [NUMBERED_RE.sub("", line).strip(" \t-*•") for line in lines
+                     if NUMBERED_RE.match(line) and len(line.strip()) > 3]
+        if not req_lines:
+            req_lines = [line.strip() for line in lines if len(line.strip()) > 20][:30]
     sections = []
     for line in lines:
         match = STEP_RE.match(line)

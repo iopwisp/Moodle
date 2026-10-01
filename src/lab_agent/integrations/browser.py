@@ -9,6 +9,7 @@ page state carry over.  Headed mode is the default for evidence-oriented labs
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -249,13 +250,24 @@ class BrowserAdapter(BrowserNarration, BaseIntegration):
     def plan_templates(self, analysis: Any, registry: Any) -> list[dict[str, Any]]:
         return []
 
-    def match_requirement(self, text: str, analysis: Any) -> tuple[str, dict[str, Any], float] | None:
-        import re
+    # Documentation/reference hosts and placeholder targets a line merely cites, never a page to open.
+    _DOC_HOSTS = ("portswigger.net", "developer.mozilla.org", "owasp.org", "w3.org", "wikipedia.org", "rfc-editor.org")
+    _PLACEHOLDER = ("your-lab-id", "example.", "attacker.", "victim.", "<", "yourusername")
+    _OPEN_VERB = re.compile(r"\b(open|visit|go to|navigate|browse|load|log ?in (?:at|to)|перейд|откр|заход)\b", re.IGNORECASE)
 
+    def match_requirement(self, text: str, analysis: Any) -> tuple[str, dict[str, Any], float] | None:
         urls = re.findall(r"https?://[^\s<>()\[\]{}\"']+", text)
-        if urls:
-            return "browser.visit", {"url": urls[0].rstrip(".,;")}, 10.0
-        return None
+        if not urls:
+            return None
+        url = urls[0].rstrip(".,;")
+        host = re.sub(r"^https?://", "", url).split("/")[0].lower()
+        # A reference citation ("Tool — https://...") or a doc/placeholder link is not an instruction to visit;
+        # only an explicit "open/visit this URL" line becomes a browser step.
+        cited = " — http" in text or " — https" in text or re.match(r"^\s*(references|see also|mdn|appendix)\b", text, re.IGNORECASE)
+        if (any(token in url.lower() for token in self._PLACEHOLDER) or any(host.endswith(d) for d in self._DOC_HOSTS)
+                or cited or not self._OPEN_VERB.search(text)):
+            return None
+        return "browser.visit", {"url": url}, 10.0
 
 
 def create_adapters(services: Any) -> list[BrowserAdapter]:

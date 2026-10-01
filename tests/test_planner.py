@@ -60,6 +60,39 @@ def test_requirement_matching_without_templates(tmp_path: Path, registry) -> Non
     assert plan.steps[1].screenshot_required and plan.steps[2].parameters == {"url": "http://localhost:8000/login"}
 
 
+def test_task_structured_assignment_collapses_to_its_tasks(tmp_path: Path, registry) -> None:
+    """A web-security lab is a few tasks, not one step per prose bullet, and reference links are not visits."""
+    source = tmp_path / "lab.txt"
+    source.write_text(
+        "Lab 3 - Web messaging and sessions\n"
+        "1. Learning objectives\n"
+        "1. Exploit an insecure postMessage listener.\n"
+        "2. Forge a weak stay-logged-in cookie.\n"
+        "Task 3.1 - DOM XSS via an insecure postMessage listener\n"
+        "Some background prose mentioning Burp and the browser at length.\n"
+        "Task 3.2 - Forging a weak stay-logged-in cookie\n"
+        "Task 3.3 - Exploiting ambient authority with CSRF\n"
+        "References\n"
+        "PortSwigger - CSRF: https://portswigger.net/web-security/csrf\n"
+        "MDN - postMessage(): https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage\n",
+        encoding="utf-8")
+    analysis = analyze([source])
+    assert [r.split(":")[0] for r in analysis.requirements] == ["Task 3.1", "Task 3.2", "Task 3.3"]
+    plan = deterministic_plan(analysis, registry)
+    # The student solves these hands-on labs; the agent records them, it does not invent tool steps.
+    assert all(t.action == "core.manual_review" for t in plan.steps)
+    assert not any(t.action == "browser.visit" for t in plan.steps)  # reference/doc links are never visited
+
+
+def test_browser_visit_only_on_an_open_instruction(registry) -> None:
+    browser = registry.adapter("browser")
+    assert browser.match_requirement("Open http://localhost:8000/login in the browser", None)[0] == "browser.visit"
+    # a cited reference, a docs page and a per-session placeholder are not visitable targets
+    assert browser.match_requirement("PortSwigger - CSRF: https://portswigger.net/web-security/csrf", None) is None
+    assert browser.match_requirement("host the lab at https://YOUR-LAB-ID.web-security-academy.net/", None) is None
+    assert browser.match_requirement("The browser attaches the session cookie automatically", None) is None
+
+
 def test_ai_plan_is_validated_and_mapped(tmp_path: Path, registry, config) -> None:
     source = tmp_path / "lab.txt"
     source.write_text("1. Hash the evidence\n", encoding="utf-8")
