@@ -319,7 +319,11 @@ def build_report(workspace: Path, registry: Any = None) -> StudentReport:
     for task in state.plan.steps:
         items = [item for item in evidence if item.step_id == task.id]
         markdown = [workspace / item.path for item in items if item.path.lower().endswith(".md") and item.id in intact]
-        if task.action == "core.manual_review" and (markdown or analysis.get("questions")):
+        # Only the dedicated "answers" step (or any step with the student's own Markdown attached) belongs in the
+        # answers section; ordinary manual-review tasks are steps of the work like any other.
+        is_answers = task.action == "core.manual_review" and (
+            markdown or "written answers" in str(task.parameters.get("reason", "")).lower())
+        if is_answers:
             answers.append((task, markdown))
             continue
         facts = StepFacts(task.action, task.title, task.status.value, dict(task.parameters), dict(task.result_details),

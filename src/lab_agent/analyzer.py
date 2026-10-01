@@ -295,8 +295,8 @@ def analyze(paths: list[Path]) -> AssignmentAnalysis:
     )
 
 
-OBJECTIVE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?(?:#+\s*)?(цел[ьи](?:\s+(?:лабораторной\s+)?работы)?|objectives?|goals?|aims?|purpose)"
-                          r"\s*[:.\-–—]?\s*(.*)$", re.IGNORECASE)
+OBJECTIVE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?(?:#+\s*)?(цел[ьи](?:\s+(?:лабораторной\s+)?работы)?|learning\s+objectives?|"
+                          r"objectives?|goals?|aims?|purpose)\s*[:.\-–—]?\s*(.*)$", re.IGNORECASE)
 SECTION_START_RE = re.compile(r"^\s*(?:#+\s*)?(?:часть|раздел|задани|ход\s|порядок|теор|практ|оборудован|материал|требован|"
                               r"исходн|сценари|кейс|легенд|введени|part\b|section|task|procedure|theory|equipment|materials|"
                               r"requirements|deliverables|scenario|background|introduction|case\b)", re.IGNORECASE)

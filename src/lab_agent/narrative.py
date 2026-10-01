@@ -143,6 +143,11 @@ REASONS = [
      {"ru": "Burp запущен, но его прокси на порту {port} ещё не включён (в окне Burp нужно выбрать Temporary project → "
             "Next → Start Burp)",
       "en": "Burp is open but its proxy on port {port} is not running yet (choose Temporary project → Next → Start Burp)"}),
+    (r"Solve this PortSwigger lab|attach the 'Solved'",
+     {"ru": "эту лабораторную нужно решить вручную в браузере через Burp и приложить скриншот баннера «Solved» и свои "
+            "записи (`lab-agent complete-step <workspace> <шаг> --verification ... --attach solved.png`)",
+      "en": "solve this lab by hand in the browser through Burp and attach the 'Solved' banner screenshot and your records "
+            "(`lab-agent complete-step <workspace> <step> --verification ... --attach solved.png`)"}),
     (r"No registered capability can perform",
      {"ru": "автоматически этот пункт не выполняется, его нужно сделать вручную",
       "en": "it cannot be automated and has to be done by hand"}),

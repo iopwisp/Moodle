@@ -79,9 +79,13 @@ def test_task_structured_assignment_collapses_to_its_tasks(tmp_path: Path, regis
     analysis = analyze([source])
     assert [r.split(":")[0] for r in analysis.requirements] == ["Task 3.1", "Task 3.2", "Task 3.3"]
     plan = deterministic_plan(analysis, registry)
-    # The student solves these hands-on labs; the agent records them, it does not invent tool steps.
-    assert all(t.action == "core.manual_review" for t in plan.steps)
-    assert not any(t.action == "browser.visit" for t in plan.steps)  # reference/doc links are never visited
+    actions = [t.action for t in plan.steps]
+    # The Burp scaffold starts the proxy, then leaves one recorded step per task for the student to solve.
+    assert actions[:2] == ["burp.launch", "burp.configure_proxy"]
+    tasks = [t for t in plan.steps if t.action == "core.manual_review" and t.requirement_refs]
+    assert [t.requirement_refs[0].split(":")[0] for t in tasks[:3]] == ["Task 3.1", "Task 3.2", "Task 3.3"]
+    assert all(t.evidence_type_required == "screenshot" for t in tasks[:3])  # the "Solved" banner
+    assert "browser.visit" not in actions  # reference/doc links are never visited
 
 
 def test_browser_visit_only_on_an_open_instruction(registry) -> None:

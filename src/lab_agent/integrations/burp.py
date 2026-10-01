@@ -166,11 +166,18 @@ class BurpAdapter(BurpNarration, BaseIntegration):
         settle = time.monotonic() + 8  # Burp often starts the temporary project by itself
         while not port_open(port) and time.monotonic() < settle:
             context.sleep(1)
-        if not port_open(port) and app.has_operation("start_temporary_project"):
-            app.run_operation("start_temporary_project")
-        deadline = time.monotonic() + param_float(parameters, "timeout", float(app.profile.get("proxy_wait_seconds", 20)))
-        while not port_open(port) and time.monotonic() < deadline:
-            context.sleep(1)
+        deadline = time.monotonic() + param_float(parameters, "timeout", float(app.profile.get("proxy_wait_seconds", 30)))
+        # The start-up wizard is not interactable the instant the window appears, so pressing Enter once can
+        # miss it. Pass it (Enter, Enter) and retry every few seconds until the proxy actually comes up.
+        if app.has_operation("start_temporary_project"):
+            while not port_open(port) and time.monotonic() < deadline:
+                app.run_operation("start_temporary_project")
+                checkpoint = time.monotonic() + 6
+                while not port_open(port) and time.monotonic() < checkpoint:
+                    context.sleep(1)
+        else:
+            while not port_open(port) and time.monotonic() < deadline:
+                context.sleep(1)
         picture = app.screenshot(f"burp_launch_{context.stamp()}.png")
         items = [evidence(picture, "Burp Suite window", "screenshot")]
         if not port_open(port):
@@ -358,6 +365,48 @@ class BurpAdapter(BurpNarration, BaseIntegration):
 
     def shutdown(self) -> None:
         self.pending = None
+
+    # ------------------------------------------------------------------ planning
+    def plan_templates(self, analysis: Any, registry: Any) -> list[dict[str, Any]]:
+        """Scaffold a web-security lab (PortSwigger-style): start Burp + proxy, one recorded step per task.
+
+        The labs themselves are solved by the student in the browser through Burp - there is no capability
+        that solves a PortSwigger lab, and the assignment says to work the exploits out by hand. The agent
+        starts Burp, verifies the proxy, and leaves one review step per task whose evidence is the "Solved"
+        banner the student attaches (``complete-step --attach``).
+        """
+        import re
+
+        corpus = "\n".join(getattr(analysis, "extracted_text_files", {}).values()).lower()
+        if "burp" not in corpus and "portswigger" not in corpus and "web-security-academy" not in corpus:
+            return []
+        if not any(word in corpus for word in ("proxy", "intercept", "repeater", "xss", "csrf", "cookie", "session",
+                                               "postmessage", "прокси", "перехват")):
+            return []
+
+        tasks = [r for r in getattr(analysis, "requirements", []) if re.match(r"^(task|задан|задача)\b", r, re.IGNORECASE)]
+        if not tasks:
+            seen: dict[str, str] = {}
+            for section in getattr(analysis, "sections", []):
+                number, title = str(section.get("number", "")), str(section.get("title", "")).strip(" -—:.")
+                if "." in number and len(title) >= 8:
+                    seen.setdefault(number, f"Task {number}: {title}")
+            tasks = list(seen.values())
+
+        steps: list[dict[str, Any]] = [
+            {"title": "Start Burp Suite and its proxy", "action": "burp.launch", "parameters": {},
+             "depends_on": [], "run_after": [], "requirement": "Working Burp Suite proxy"},
+            {"title": "Verify the Burp proxy listener", "action": "burp.configure_proxy", "parameters": {},
+             "depends_on": [1], "run_after": [], "evidence_type": "json", "requirement": "Proxy intercepts browser traffic"},
+        ]
+        for task in tasks:
+            steps.append({
+                "title": task[:120], "action": "core.manual_review",
+                "parameters": {"reason": "Solve this PortSwigger lab in the browser through Burp, then attach the "
+                                         "'Solved' banner screenshot and your records with "
+                                         "`lab-agent complete-step <workspace> <step> --verification ... --attach solved.png`."},
+                "depends_on": [], "run_after": [2], "evidence_type": "screenshot", "requirement": task[:300]})
+        return steps
 
 
 def create_adapters(services: Any) -> list[BurpAdapter]:
