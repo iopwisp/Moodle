@@ -53,11 +53,19 @@ lab-agent resume  .\workspace\Assignment_3_Student_Materials            # про
 lab-agent pause|stop .\workspace\...                                     # из другого терминала
 lab-agent approve .\workspace\... 7                                      # подтвердить шаг, ожидающий человека
 lab-agent review  .\workspace\...                                        # готовность к сдаче
+lab-agent complete-step .\workspace\... 19 --verification "ответы написаны" --attach answers.md   # свои ответы (Markdown) в отчёт
 lab-agent report  .\workspace\...                                        # пересобрать DOCX/PDF
 lab-agent serve                                                          # http://127.0.0.1:8765
 ```
 
 `run` возвращает код 0 только при статусе `COMPLETED` и код 3, если остались FAILED или BLOCKED шаги.
+
+Отчётов два: `reports/<Задание>_Report.docx/.pdf` — сам отчёт по лабораторной (титульный лист, цель, исходные данные,
+ПО, ход работы обычным текстом на языке задания, ответы, вывод, приложения), и `reports/<Задание>_Audit.docx/.pdf` —
+технический журнал (проверки, хеши, ошибки). Скриншоты окон снимаются через `PrintWindow`: окно попадает на снимок,
+даже если его что-то перекрывает, а чужие окна — никогда. Шаги, которые нажимают клавиши в окнах программ (Burp,
+Packet Tracer, desktop), агент перечисляет перед запуском и объявляет перед каждым: в это время не трогайте мышь и
+клавиатуру.
 
 AI-провайдер: `OPENAI_API_KEY` (OpenAI Responses API со strict JSON schema) или `OLLAMA_HOST` (Ollama).
 Без них работает детерминированный планировщик: он использует шаблоны процессов, которые
