@@ -675,7 +675,19 @@ class ForensicsAdapter(BaseIntegration):
         if end is None:
             return IntegrationResult.failed("No End Of Central Directory record (50 4B 05 06) in the last fragment.")
         eocd_offset = last.rfind(b"PK\x05\x06")
-        assembled = b"".join(bytes(f) for f in fragments[:-1]) + last[:end]
+        prefix = b"".join(bytes(f) for f in fragments[:-1])
+        # The EOCD records where the central directory starts and how long it is.  Whatever sits
+        # between the end of that directory and the EOCD is file-system slack: keeping it pushes the
+        # EOCD further out, and every reader then looks for the directory at the wrong offset.  Zero
+        # padding is dropped; non-zero bytes are kept, because silently discarding data that might be
+        # evidence is worse than producing an archive that fails its own consistency check.
+        directory_size = int.from_bytes(last[eocd_offset + 12:eocd_offset + 16], "little")
+        directory_start = int.from_bytes(last[eocd_offset + 16:eocd_offset + 20], "little") - len(prefix)
+        slack = (last[directory_start + directory_size:eocd_offset]
+                 if 0 <= directory_start <= directory_start + directory_size <= eocd_offset else b"")
+        dropped = len(slack) if slack and not any(slack) else 0
+        tail = last[:directory_start + directory_size] + last[eocd_offset:end] if dropped else last[:end]
+        assembled = prefix + tail
         output = context.save_result(output_name, assembled)
         script = context.save_result("carve_script_completed.py", (
             "#!/usr/bin/env python3\n\"\"\"Manual carving generated and executed by lab-agent.\"\"\"\n\n"
@@ -684,27 +696,45 @@ class ForensicsAdapter(BaseIntegration):
             "    with open(image_path, 'rb') as img:\n        fragments = []\n"
             "        for offset in offsets:\n            img.seek(int(offset, 16))\n            fragments.append(bytearray(img.read(cluster_size)))\n"
             "    fragments[0][0:4] = b'PK\\x03\\x04'  # restore local file header\n"
+            "    prefix = b''.join(bytes(f) for f in fragments[:-1])\n"
             "    last = bytes(fragments[-1])\n    eocd = last.rfind(b'PK\\x05\\x06')\n"
             "    comment_len = int.from_bytes(last[eocd + 20:eocd + 22], 'little')\n"
-            "    last = last[:eocd + 22 + comment_len]\n"
-            "    with open(output_path, 'wb') as out:\n        for fragment in fragments[:-1]:\n            out.write(fragment)\n"
-            "        out.write(last)\n\n\nif __name__ == '__main__':\n"
+            "    end = eocd + 22 + comment_len\n"
+            "    directory_size = int.from_bytes(last[eocd + 12:eocd + 16], 'little')\n"
+            "    directory_start = int.from_bytes(last[eocd + 16:eocd + 20], 'little') - len(prefix)\n"
+            "    slack = last[directory_start + directory_size:eocd]\n"
+            "    if slack and not any(slack):  # drop zero slack between the directory and the EOCD\n"
+            "        tail = last[:directory_start + directory_size] + last[eocd:end]\n"
+            "    else:\n        tail = last[:end]\n"
+            "    with open(output_path, 'wb') as out:\n        out.write(prefix + tail)\n\n\n"
+            "if __name__ == '__main__':\n"
             f"    perform_manual_carving('{image.name}', '{output_name}')\n"))
         try:
             with zipfile.ZipFile(output) as archive:
                 bad = archive.testzip()
                 members = archive.namelist()
         except zipfile.BadZipFile as exc:
-            return IntegrationResult.failed(f"Reassembled file is not a valid ZIP: {exc}")
+            kept = len(slack) if slack and not dropped else 0
+            note = (f" {kept} non-zero bytes between the central directory and the End Of Central Directory were kept "
+                    "because they may be evidence; inspect them in the hex view before removing them by hand."
+                    if kept else "")
+            return IntegrationResult.failed(f"Reassembled file is not a valid ZIP: {exc}.{note}",
+                                            slack_bytes_dropped=dropped, slack_bytes_kept=kept)
         details = {
             "original_header_hex": original_header.hex(" ").upper(), "restored_header_hex": "50 4B 03 04",
             "eocd_offset_in_last_fragment": eocd_offset, "eocd_absolute_offset": f"0x{offsets[-1] + eocd_offset:08X}",
             "logical_end_in_last_fragment": end, "size": len(assembled), "members": members, "crc_ok": bad is None,
+            "slack_bytes_dropped": dropped,
         }
         section = {"title": "Manual reassembly of the fragmented ZIP", "paragraphs": [
             f"Fragment 1 at 0x{offsets[0]:08X} started with {details['original_header_hex']}; restored to 50 4B 03 04 (ZIP local file header).",
             (f"End Of Central Directory found at 0x{offsets[-1] + eocd_offset:08X} (byte {eocd_offset} of the last fragment); "
              f"the archive logically ends at byte {end} of that fragment (EOCD + 22 bytes + comment)."),
+            *([(f"The End Of Central Directory declares the central directory at offset {directory_start + len(prefix)} "
+                f"with a length of {directory_size} bytes, so {dropped} zero bytes of file-system slack separated that "
+                f"directory from the record. They were left out of the archive: keeping them would move the End Of "
+                f"Central Directory {dropped} bytes further out and every reader would look for the directory at the "
+                f"wrong offset.")] if dropped else []),
             f"Result {output_name}: {len(assembled)} bytes, members {members}, CRC check {'passed' if bad is None else 'FAILED'}."]}
         return IntegrationResult(
             verified=bad is None, details={**details, **({} if bad is None else {"reason": f"CRC error in {bad}"})},

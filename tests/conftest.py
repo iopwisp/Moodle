@@ -22,6 +22,10 @@ def deterministic_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Age
                      "LAB_AGENT_PACKET_TRACER_PATH", "LAB_AGENT_WIRESHARK_PATH", "LAB_AGENT_PROFILES_DIR",
                      "LAB_AGENT_AUTHORIZED_TARGETS"):
         monkeypatch.delenv(variable, raising=False)
+    # Applications installed on the developer machine (Autopsy, Burp, ...) must not leak into tests:
+    # discovery may only find what a test puts on PATH, in an env var or in its own install root.
+    monkeypatch.setattr("lab_agent.environment._roots", list)
+    monkeypatch.setattr("lab_agent.environment._registry_entries", list)
     config = AgentConfig()
     config.ai.provider = "deterministic"
     config.workspace_root = str(tmp_path / "workspaces")

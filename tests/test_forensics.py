@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from assignment_factory import CLUSTER_A, CLUSTER_B, build_assignment_zip, build_image
+from assignment_factory import CLUSTER, CLUSTER_A, CLUSTER_B, build_assignment_zip, build_image
 from fakes import fake_screenshot
 
 from lab_agent.evidence import list_evidence, validate_evidence
@@ -120,6 +120,44 @@ def test_zip_fragment_repair_finds_real_eocd(tmp_path: Path, registry) -> None:
         assert archive.read("document.txt") == b"Confidential budget 2026\n"
     script = (tmp_path / "results" / "carve_script_completed.py").read_text()
     assert "PK\\x05\\x06" in script
+
+
+def _image_with_slack(slack: bytes) -> bytes:
+    """The Assignment 3 layout, plus file-system slack between the central directory and the EOCD."""
+    image = bytearray(build_image())
+    part2 = bytes(image[CLUSTER_B:CLUSTER_B + CLUSTER])
+    eocd = part2.rfind(b"PK\x05\x06")
+    image[CLUSTER_B:CLUSTER_B + CLUSTER] = (part2[:eocd] + slack + part2[eocd:])[:CLUSTER]
+    return bytes(image)
+
+
+@pytest.mark.parametrize("slack", [b"\x00" * 37, b"\x00" * 10 + b"KEEP" + b"\x00" * 10])
+def test_zip_fragment_repair_handles_slack_before_eocd(tmp_path: Path, registry, slack: bytes) -> None:
+    import runpy
+
+    context = _workspace(tmp_path)
+    (tmp_path / "input" / "evidence.dd").write_bytes(_image_with_slack(slack))
+    result = registry.execute("forensics.repair_zip_fragments",
+                              {"offsets": f"{hex(CLUSTER_A)},{hex(CLUSTER_B)}", "cluster_size": 4096}, context)
+    repaired = (tmp_path / "results" / "evidence_fixed.zip").read_bytes()
+    if any(slack):
+        # Non-zero bytes might be evidence: they stay in the archive and are not silently dropped.
+        assert not result.verified and b"KEEP" in repaired
+        assert result.details["slack_bytes_dropped"] == 0 and result.details["slack_bytes_kept"] == len(slack)
+        assert "may be evidence" in result.reason
+    else:
+        assert result.verified and _checks(result, context)
+        assert result.details["slack_bytes_dropped"] == len(slack)
+        with zipfile.ZipFile(tmp_path / "results" / "evidence_fixed.zip") as archive:
+            assert archive.read("document.txt") == b"Confidential budget 2026\n"
+        assert any("zero bytes of file-system slack" in p for s in result.report_sections for p in s["paragraphs"])
+    # The script handed in with the report reproduces exactly the same archive.
+    script = tmp_path / "results" / "carve_script_completed.py"
+    image_copy = tmp_path / "results" / "evidence.dd"
+    image_copy.write_bytes((tmp_path / "input" / "evidence.dd").read_bytes())
+    namespace = runpy.run_path(str(script))
+    namespace["perform_manual_carving"](str(image_copy), str(tmp_path / "script_output.zip"))
+    assert (tmp_path / "script_output.zip").read_bytes() == repaired
 
 
 def test_tsk_missing_is_blocked(tmp_path: Path, registry, monkeypatch) -> None:

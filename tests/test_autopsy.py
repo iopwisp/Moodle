@@ -108,6 +108,37 @@ def test_ingest_is_verified_from_the_case_database(autopsy_context: ExecutionCon
     assert report.verified and (autopsy_context.workspace / "results" / "autopsy_report.html").is_file()
 
 
+def test_ingest_prepares_case_base_dir_and_leaves_reports_to_their_own_step(
+        autopsy_context: ExecutionContext, registry, monkeypatch) -> None:
+    fake = FakeAutopsy()
+    monkeypatch.setattr("lab_agent.integrations.autopsy.run_command", fake)
+    assert registry.execute("autopsy.ingest", {}, autopsy_context).verified
+    command = fake.commands[0]
+    assert "--generateReports" not in command
+    base = next(part.split("=", 1)[1] for part in command if part.startswith("--caseBaseDir="))
+    assert Path(base).is_dir()
+
+
+def test_report_without_command_line_profile_is_blocked(autopsy_context: ExecutionContext, registry, monkeypatch) -> None:
+    from lab_agent.integrations.base import CapabilityBlocked
+
+    fake = FakeAutopsy()
+    monkeypatch.setattr("lab_agent.integrations.autopsy.run_command", fake)
+    assert registry.execute("autopsy.ingest", {}, autopsy_context).verified
+
+    def no_profile(command: list[str], **kwargs: object) -> CommandResult:
+        return CommandResult(command, 1, "", "Error loading reporting configuration CommandLineIngest", 0.1)
+
+    monkeypatch.setattr("lab_agent.integrations.autopsy.run_command", no_profile)
+    try:
+        result = registry.execute("autopsy.generate_report", {}, autopsy_context)
+    except CapabilityBlocked as blocked:  # depending on how the registry surfaces it
+        assert "Generate Report" in str(blocked)
+    else:
+        assert result.blocked and not result.verified
+        assert "Generate Report" in result.reason
+
+
 def test_unfinished_ingest_is_not_verified(autopsy_context: ExecutionContext, registry, monkeypatch) -> None:
     monkeypatch.setattr("lab_agent.integrations.autopsy.run_command", FakeAutopsy(ingest_status=0))
     result = registry.execute("autopsy.ingest", {}, autopsy_context)

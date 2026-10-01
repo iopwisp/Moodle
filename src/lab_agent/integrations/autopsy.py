@@ -108,7 +108,7 @@ class AutopsyAdapter(BaseIntegration):
         Capability("autopsy.wait_for_completion", "autopsy", "Verify from the case database that ingest finished",
                    (Param("case_dir", "path"),), ("json",), "ingest jobs completed"),
         Capability("autopsy.ingest", "autopsy",
-                   "One command: create case, add the image, run ingest and generate reports",
+                   "One command: create case, add the image and run ingest",
                    (Param("data_source", "path"), Param("case_name", "str"), Param("profile", "str")), ("log",),
                    "case DB lists the data source and completed ingest jobs", requires=("app:autopsy",),
                    keywords=("autopsy", "ingest")),
@@ -151,7 +151,10 @@ class AutopsyAdapter(BaseIntegration):
         return ManagedApplication("autopsy", context, spec=AUTOPSY_SPEC).executable()
 
     def _cases_dir(self, context: ExecutionContext) -> Path:
-        return context.folder("working") / "autopsy_cases"
+        # Autopsy refuses to start when --caseBaseDir does not already exist.
+        path = context.folder("working") / "autopsy_cases"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def _case_dir(self, parameters: dict[str, Any], context: ExecutionContext) -> Path:
         value = param_str(parameters, "case_dir") or self._state(context).get("case_dir", "")
@@ -263,8 +266,11 @@ class AutopsyAdapter(BaseIntegration):
         case_name = _safe_name(param_str(parameters, "case_name") or f"{context.assignment}_agent")
         profile = param_str(parameters, "profile")
         base = self._cases_dir(context)
+        # --generateReports is deliberately not bundled here: it needs a command-line report profile
+        # that only exists once it is created in the GUI, and its failure would discard a whole
+        # successful ingest.  Reports are a separate capability (autopsy.generate_report).
         args = ["--createCase", f"--caseName={case_name}", f"--caseBaseDir={base}", "--addDataSource",
-                f"--dataSourcePath={source}", "--runIngest", "--generateReports"] + ([f"--ingestProfile={profile}"] if profile else [])
+                f"--dataSourcePath={source}", "--runIngest"] + ([f"--ingestProfile={profile}"] if profile else [])
         details, log = self._run(context, args, "ingest")
         if details["exit_code"] != 0:
             return IntegrationResult.failed(f"Autopsy command-line ingest exited with {details['exit_code']}", **details)
@@ -352,7 +358,16 @@ class AutopsyAdapter(BaseIntegration):
         case_dir = self._case_dir(parameters, context)
         details, log = self._run(context, [f"--caseDir={case_dir}", "--generateReports"], "report")
         reports = [p for p in (case_dir / "Reports").rglob("*") if p.is_file()] if (case_dir / "Reports").is_dir() else []
-        if details["exit_code"] != 0 or not reports:
+        if details["exit_code"] != 0 and not reports:
+            output = f"{details.get('stdout', '')}\n{details.get('stderr', '')}"
+            if "reporting configuration" in output.casefold() or not output.strip():
+                raise CapabilityBlocked(
+                    "Autopsy has no command-line report profile, so --generateReports cannot run "
+                    "(it looks for the profile named 'CommandLineIngest'). Create one once in the Autopsy GUI "
+                    "(Tools -> Generate Report, save the configuration), or use autopsy.inspect_results, which "
+                    "exports the same findings as CSV/JSON from the case database.")
+            return IntegrationResult.failed("Autopsy did not generate report files", **details)
+        if not reports:
             return IntegrationResult.failed("Autopsy did not generate report files", **details)
         html = next((p for p in reports if p.suffix.lower() in {".html", ".htm"}), reports[0])
         copy = context.save_result("autopsy_report" + html.suffix.lower(), html.read_bytes())
