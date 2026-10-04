@@ -145,7 +145,8 @@ def ai_plan(analysis: AssignmentAnalysis, provider: LLMProvider, registry: Integ
         answer = provider.complete_json(SYSTEM_PROMPT, _prompt(analysis, registry, environment, policy.targets, feedback),
                                         plan_schema(registry), name="lab_plan")
         try:
-            plan = plan_from_payload(analysis, answer, registry, f"{provider.name}:{provider.model}")
+            label = f"{provider.name}:{provider.model}" if provider.model else provider.name
+            plan = plan_from_payload(analysis, answer, registry, label)
         except (KeyError, ValueError) as exc:
             last_error, feedback = exc, [str(exc)]
             continue
@@ -268,8 +269,8 @@ def build_ai_plan(
     registry = registry or build_registry(config=config)
     policy = PolicyEngine(config, allowed_targets)
     name = resolve_provider_name(provider if provider != "auto" else config.ai.provider if config.ai.provider != "auto" else "auto")
-    if name not in {"deterministic", "openai", "ollama"} and llm is None:
-        raise ValueError("AI provider must be auto, openai, ollama, or deterministic.")
+    if name not in {"deterministic", "openai", "ollama", "codex"} and llm is None:
+        raise ValueError("AI provider must be auto, openai, ollama, codex, or deterministic.")
     if llm is None and name != "deterministic":
         try:
             llm = make_provider(name, model, config)

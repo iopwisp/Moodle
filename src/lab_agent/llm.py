@@ -147,6 +147,96 @@ class OllamaProvider:
         return value
 
 
+def find_codex() -> str | None:
+    """Codex CLI: ``LAB_AGENT_CODEX_PATH``, ``PATH``, or the CLI shipped inside the Codex desktop app (Windows)."""
+    import shutil
+    import subprocess
+
+    configured = os.environ.get("LAB_AGENT_CODEX_PATH")
+    if configured:
+        return configured if os.path.isfile(configured) else None
+    found = shutil.which("codex")
+    if found:
+        return found
+    if os.name == "nt":  # the Microsoft Store app keeps codex.exe in a versioned WindowsApps folder
+        try:
+            location = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "(Get-AppxPackage -Name OpenAI.Codex).InstallLocation"],
+                capture_output=True, text=True, timeout=20, check=False).stdout.strip().splitlines()
+        except (OSError, subprocess.SubprocessError):
+            return None
+        for folder in location:
+            candidate = os.path.join(folder.strip(), "app", "resources", "codex.exe")
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
+class CodexProvider:
+    """Codex CLI in non-interactive mode (``codex exec``): uses the ChatGPT subscription Codex is signed in with.
+
+    The answer is constrained with ``--output-schema`` and read from ``--output-last-message``; Codex runs
+    with a read-only sandbox in an empty temporary folder, so it can only answer, not change files.
+    """
+
+    name = "codex"
+
+    def __init__(self, model: str, *, timeout: float = 90, retries: int = 1, base_url: str | None = None,
+                 executable: str | None = None) -> None:
+        self.model = model
+        # an agent session starts up and reasons before answering: give it more time than an HTTP call
+        self.timeout = max(timeout, 300.0)
+        self.retries = retries
+        found = executable or find_codex()
+        if not found:
+            raise ProviderError("Codex CLI was not found; install Codex or set LAB_AGENT_CODEX_PATH to codex.exe.")
+        self.executable = found
+
+    def _command(self, folder: str, schema_file: str, answer_file: str) -> list[str]:
+        command = [self.executable, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral",
+                   "--color", "never", "--output-schema", schema_file, "-o", answer_file, "-C", folder]
+        return command + (["-m", self.model] if self.model else []) + ["-"]
+
+    def complete_json(self, system: str, user: str, schema: dict[str, Any], *, name: str = "answer") -> dict[str, Any]:
+        import subprocess
+        import tempfile
+
+        prompt = (f"{system}\n\nAnswer with one JSON object that matches the given output schema ({name}). "
+                  f"Do not run commands or edit files.\n\n{user}")
+        last = ""
+        for _ in range(self.retries + 1):
+            with tempfile.TemporaryDirectory(prefix="lab_agent_codex_") as folder:
+                schema_file, answer_file = os.path.join(folder, "schema.json"), os.path.join(folder, "answer.json")
+                with open(schema_file, "w", encoding="utf-8") as stream:
+                    json.dump(schema, stream)
+                try:
+                    completed = subprocess.run(self._command(folder, schema_file, answer_file), input=prompt.encode("utf-8"),
+                                               capture_output=True, timeout=self.timeout, check=False,
+                                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                except subprocess.TimeoutExpired:
+                    last = f"no answer within {self.timeout:.0f} s"
+                    continue
+                except OSError as exc:
+                    raise ProviderError(f"Codex could not be started: {exc}") from exc
+                text = ""
+                if os.path.isfile(answer_file):
+                    with open(answer_file, encoding="utf-8") as stream:
+                        text = stream.read().strip()
+                if completed.returncode != 0 or not text:
+                    error = completed.stderr.decode("utf-8", errors="replace").strip()
+                    last = redact_text(error[-600:]) or f"exit code {completed.returncode}"
+                    if any(word in error.casefold() for word in ("login", "not logged in", "unauthorized", "401")):
+                        raise ProviderError(f"Codex is not signed in; run `codex login` once. ({last})")
+                    continue
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ProviderError(f"Codex returned invalid JSON: {exc}") from exc
+            _validate(value, schema)
+            return value
+        raise ProviderError(f"Codex did not return an answer after {self.retries + 1} attempt(s): {last}")
+
+
 class ScriptedProvider:
     """Deterministic provider for tests and offline demos: replays prepared answers."""
 
@@ -169,8 +259,10 @@ class ScriptedProvider:
         return value
 
 
-DEFAULT_MODELS = {"openai": "gpt-6-astra", "ollama": "qwen2.5:14b"}
-PROVIDERS: dict[str, Callable[..., LLMProvider]] = {"openai": OpenAIProvider, "ollama": OllamaProvider}
+# Codex: empty model = the model selected in Codex itself (what the ChatGPT plan allows).
+DEFAULT_MODELS = {"openai": "gpt-6-astra", "ollama": "qwen2.5:14b", "codex": ""}
+PROVIDERS: dict[str, Callable[..., LLMProvider]] = {"openai": OpenAIProvider, "ollama": OllamaProvider,
+                                                    "codex": CodexProvider}
 
 
 def resolve_provider_name(requested: str | None) -> str:

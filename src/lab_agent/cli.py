@@ -72,7 +72,7 @@ def make_parser() -> argparse.ArgumentParser:
         p.add_argument("--allowed-target", action="append", default=[], help="Authorized hostname (localhost is always allowed)")
 
     def provider(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--ai-provider", choices=("auto", "openai", "ollama", "deterministic"), default="auto")
+        p.add_argument("--ai-provider", choices=("auto", "openai", "ollama", "codex", "deterministic"), default="auto")
         p.add_argument("--model")
 
     p = sub.add_parser("analyze", help="Extract assignment text and create analysis, checklist and workspace")
@@ -157,6 +157,13 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("workspace")
     p = sub.add_parser("report", help="Generate DOCX and PDF reports from recorded state")
     p.add_argument("workspace")
+    p = sub.add_parser("build-report", help="Build a student report (DOCX + PDF) from one Markdown file with a YAML header")
+    p.add_argument("source", type=Path, help="report .md file; pictures and CSV files are relative to it")
+    p.add_argument("--out-dir", type=Path, help="folder for the DOCX/PDF (default: next to the .md file)")
+    p.add_argument("--no-pdf", action="store_true")
+    p.add_argument("--strict", action="store_true", help="fail when the style check reports anything")
+    p = sub.add_parser("lint-report", help="Check a report (.md or .docx) for machine-sounding phrases and leftovers")
+    p.add_argument("source", type=Path)
     p = sub.add_parser("serve", help="Start the local web dashboard")
     p.add_argument("--workspace-root", type=Path)
     p.add_argument("--host", default="127.0.0.1")
@@ -340,6 +347,23 @@ def main(argv: list[str] | None = None) -> int:
             _print(summary)
         elif command == "report":
             _print(generate_reports(_workspace_arg(args.workspace)))
+        elif command == "build-report":
+            from .report_builder import build_report_files, lint_file
+
+            if args.strict:
+                findings = lint_file(args.source)
+                if findings:
+                    _print({"lint": findings})
+                    print("lab-agent: error: the style check found problems (see lint); fix them or drop --strict",
+                          file=sys.stderr)
+                    return 4
+            _print(build_report_files(args.source, args.out_dir, pdf=not args.no_pdf))
+        elif command == "lint-report":
+            from .report_builder import lint_file
+
+            findings = lint_file(args.source)
+            _print({"source": str(args.source), "lint": findings})
+            return 4 if any(item.startswith("[error]") for item in findings) else 0
         elif command == "serve":
             try:
                 import uvicorn
