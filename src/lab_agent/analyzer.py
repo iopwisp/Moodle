@@ -1,6 +1,6 @@
 """Assignment analysis: read every supplied file, classify it and extract requirements.
 
-Supported text sources: PDF, DOCX, TXT, MD, CSV, JSON and ZIP archives (their
+Supported text sources: PDF, DOCX, HTML, TXT, MD, CSV, JSON and ZIP archives (their
 documents are read in memory; binary members such as ``evidence.dd`` are
 classified and later extracted into ``working/extracted/``).  Other files are
 kept as inputs and classified by extension and magic bytes.
@@ -14,13 +14,15 @@ import io
 import json
 import re
 import zipfile
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
 
 from .logging_setup import get_logger
 from .models import AssignmentAnalysis, ExecutionPlan, InputFile, PlannedTask
 
-SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".csv", ".json", ".zip"}
+SUPPORTED = {".pdf", ".docx", ".htm", ".html", ".txt", ".md", ".csv", ".json", ".zip"}
+DOCUMENTS = {".pdf", ".docx", ".htm", ".html"}
 TEXT_MEMBER_TYPES = {".txt", ".md", ".csv", ".json", ".conf", ".cfg", ".ini", ".py", ".sha256", ".md5", ".yaml", ".yml", ".tex"}
 JUNK = re.compile(r"(^|/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(/|$)|(^|/)\._", re.IGNORECASE)
 MAX_MEMBER_BYTES = 20_000_000
@@ -36,7 +38,7 @@ ROLE_BY_SUFFIX = {
     **{s: "capture" for s in (".pcap", ".pcapng", ".cap")},
     **{s: "config" for s in (".conf", ".cfg", ".ini", ".yaml", ".yml")},
     **{s: "script" for s in (".py", ".ps1", ".sh", ".bat")},
-    **{s: "project" for s in (".pkt", ".pka", ".tex", ".bib")},
+    **{s: "project" for s in (".pkt", ".pka", ".pksz", ".tex", ".bib")},
     **{s: "image" for s in (".png", ".jpg", ".jpeg", ".gif", ".bmp")},
 }
 SCREENSHOT_TERMS = ("screenshot", "screen shot", "скриншот", "снимок экрана")
@@ -82,6 +84,53 @@ def _docx_bytes_text(data: bytes) -> str:
     return "\n".join("".join(node.itertext()) for node in root.findall(".//w:p", ns))
 
 
+class _HTMLText(HTMLParser):
+    """Visible text of an HTML page (Cisco instructions are often Word documents saved as .htm)."""
+
+    BLOCK = frozenset({"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "table", "ul", "ol", "title"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style"}:
+            self._skip += 1
+        if tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self._skip:
+            self._skip -= 1
+        if tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip:
+            self.parts.append(data)
+
+    def text(self) -> str:
+        lines = (re.sub(r"[ \t\xa0]+", " ", line).strip() for line in "".join(self.parts).splitlines())
+        return "\n".join(line for line in lines if line)
+
+
+def _html_bytes_text(data: bytes) -> str:
+    declared = re.search(rb"charset\s*=\s*[\"']?([A-Za-z0-9_-]+)", data[:4096])
+    encodings = [declared.group(1).decode("ascii")] if declared else []
+    text = None
+    for encoding in [*encodings, "utf-8-sig", "cp1251"]:
+        try:
+            text = data.decode(encoding)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    parser = _HTMLText()
+    parser.feed(text if text is not None else data.decode("utf-8", errors="replace"))
+    parser.close()
+    return parser.text()
+
+
 def _docx_text(path: Path) -> str:
     return _docx_bytes_text(path.read_bytes())
 
@@ -113,6 +162,8 @@ def _text_from_bytes(name: str, data: bytes) -> str:
         return _docx_bytes_text(data)
     if suffix == ".pdf":
         return _pdf_bytes_text(data)
+    if suffix in {".htm", ".html"}:
+        return _html_bytes_text(data)
     if suffix == ".csv":
         return "\n".join(" | ".join(row) for row in csv.reader(io.StringIO(_decode(data))))
     if suffix == ".json":
@@ -136,8 +187,9 @@ def _role(name: str, head: bytes, text: str | None) -> tuple[str, str]:
     suffix = PurePosixPath(lowered).suffix
     if lowered.endswith((".pcap.gz",)):
         return "capture", ""
-    if suffix in {".docx", ".pdf"} and text is not None:
-        instruction = re.search(r"assignment|lab|лаборатор|задани|practical|практич", lowered + " " + text[:3000], re.IGNORECASE)
+    if suffix in DOCUMENTS and text is not None:
+        instruction = re.search(r"assignment|lab|лаборатор|задани|practical|практич|activity|packet tracer|instructions",
+                                lowered + " " + text[:3000], re.IGNORECASE)
         return ("assignment" if instruction else "reference"), ""
     if suffix in ROLE_BY_SUFFIX:
         role = ROLE_BY_SUFFIX[suffix]
@@ -177,7 +229,7 @@ class _Collector:
         digest = hashlib.sha256(data).hexdigest()
         text: str | None = None
         suffix = PurePosixPath(name).suffix.lower()
-        if suffix in {".docx", ".pdf"} or (suffix in TEXT_MEMBER_TYPES and not _looks_binary(data[:4096])):
+        if suffix in DOCUMENTS or (suffix in TEXT_MEMBER_TYPES and not _looks_binary(data[:4096])):
             try:
                 text = _text_from_bytes(name, data)
             except Exception as exc:  # noqa: BLE001 - keep going, record the failure
@@ -203,7 +255,7 @@ def analyze(paths: list[Path]) -> AssignmentAnalysis:
         files.extend(p for p in candidates if not JUNK.search(p.as_posix()))
     readable = [p for p in files if p.suffix.lower() in SUPPORTED]
     if not readable:
-        raise ValueError("No supported assignment files found (.pdf, .docx, .txt, .md, .csv, .json, .zip).")
+        raise ValueError("No supported assignment files found (.pdf, .docx, .htm/.html, .txt, .md, .csv, .json, .zip).")
 
     collector = _Collector()
     limitations = ["Text extraction is deterministic. A configured AI planner may refine the execution plan after this first pass."]
@@ -283,7 +335,11 @@ def analyze(paths: list[Path]) -> AssignmentAnalysis:
     if suspicious:
         limitations.append("Files whose extension does not match their content: " + ", ".join(Path(f.path).name for f in suspicious))
     readable_sources = [p for p in readable]
-    name = readable_sources[0].parent.name if len(files) > 1 else readable_sources[0].stem
+    if len(paths) == 1 and paths[0].is_dir():
+        name = paths[0].name
+    else:  # loose files (often straight from Downloads): name the work after the instruction document, not the folder
+        roles = {f.path: f.role for f in collector.files}
+        name = next((p for p in readable_sources if roles.get(str(p.resolve())) == "assignment"), readable_sources[0]).stem
     return AssignmentAnalysis(
         assignment=name, source_files=[str(p.resolve()) for p in files], objective=objective[:500], tools=tools,
         requirements=req_lines[:100], screenshot_requirements=screenshot_requirements[:50],

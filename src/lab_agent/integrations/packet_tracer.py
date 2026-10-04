@@ -256,10 +256,27 @@ class PacketTracerAdapter(BaseIntegration):
                    requires=("app:packet_tracer",), keywords=("save", "сохран")),
     )
 
+    def __init__(self) -> None:
+        self._launched: dict[str, Any] = {}  # project path -> ManagedApplication started by open_project
+
     def _app(self, context: ExecutionContext) -> Any:
         from ..applications import ManagedApplication
 
-        return ManagedApplication("packet_tracer", context, spec=PT_SPEC)
+        app = ManagedApplication("packet_tracer", context, spec=PT_SPEC)
+        for project in reversed(list(self._launched)):  # the newest project window opened by this run wins
+            selector = self._project_window(project)
+            if app.driver.find_window(selector, timeout=0) is not None:
+                app.selector_override = selector
+                break
+        return app
+
+    @staticmethod
+    def _project_window(project: str) -> dict[str, Any]:
+        return {"title_re": re.escape(project)}
+
+    def shutdown(self) -> None:
+        # Packet Tracer stays open after the run on purpose: the student continues the activity in it.
+        self._launched.clear()
 
     def _folder(self, context: ExecutionContext) -> Path:
         return context.folder("working/packet_tracer")
@@ -302,7 +319,20 @@ class PacketTracerAdapter(BaseIntegration):
     def open_project(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         project = context.resolve(param_str(parameters, "file"), base="input")
         app = self._app(context)
-        app.launch([str(project)], reuse=False)
+        # A retry must not start a second Packet Tracer: attach to the window that already shows this file,
+        # otherwise close the instance this adapter started before and open the file again.
+        selector = self._project_window(str(project))
+        app.selector_override = selector  # this file's window, not a Packet Tracer the student already has open
+        showing = app.driver.find_window(selector, timeout=0)
+        if showing is not None:
+            app.window = showing
+            app.check_blockers()
+        else:
+            previous = self._launched.pop(str(project), None)
+            if previous is not None:
+                previous.close()
+            app.launch([str(project)], reuse=False)
+        self._launched[str(project)] = app
         title = app.driver.window_title(app.window) if app.window is not None else ""
         picture = app.screenshot(f"packet_tracer_open_{context.stamp()}.png")
         ok = project.stem.casefold() in title.casefold()
@@ -483,7 +513,7 @@ class PacketTracerAdapter(BaseIntegration):
                                  checks=[{"type": "file_exists", "path": f"results/{target.name}", "min_size": 1024}])
 
     def plan_templates(self, analysis: Any, registry: Any) -> list[dict[str, Any]]:
-        projects = [f for f in getattr(analysis, "files", []) if f.role == "project" and f.path.lower().endswith((".pkt", ".pka"))]
+        projects = [f for f in getattr(analysis, "files", []) if f.role == "project" and f.path.lower().endswith((".pkt", ".pka", ".pksz"))]
         topology = [f for f in getattr(analysis, "files", []) if Path(f.path).stem.lower().startswith("topology")
                     and f.path.lower().endswith((".json", ".yaml", ".yml"))]
         corpus = "\n".join(analysis.extracted_text_files.values()).lower()

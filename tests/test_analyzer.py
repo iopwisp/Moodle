@@ -42,3 +42,22 @@ def test_binary_evidence_is_kept_with_the_assignment_inputs(tmp_path: Path) -> N
     image.write_bytes(b"forensic-image")
     analysis = analyze([tmp_path])
     assert str(image.resolve()) in analysis.source_files
+
+
+def test_html_instructions_are_read_and_name_the_work(tmp_path: Path) -> None:
+    """Cisco activities come as Word pages saved to .htm (windows-1252) next to the .pka, often straight in Downloads."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    page = ('<html><head><meta charset="windows-1252"><style>p {color: red}</style></head><body>'
+            "<h1>Packet Tracer - Create a Simple Network</h1><p>Objectives</p>"
+            "<p>Part 1: Build a Simple Network</p><p>Step 1: Add network devices&nbsp;to the workspace.</p>"
+            "<p>Test connectivity – ping cisco.srv</p></body></html>")  # the en dash is byte 0x96 in cp1252
+    (downloads / "Create_a_Simple_Network.htm").write_bytes(page.encode("cp1252"))
+    (downloads / "Create_a_Simple_Network_pka.pka").write_bytes(b"\x00binary activity")
+    result = analyze([downloads / "Create_a_Simple_Network.htm", downloads / "Create_a_Simple_Network_pka.pka"])
+    assert result.assignment == "Create_a_Simple_Network"  # not "Downloads"
+    roles = {Path(f.path).suffix: f.role for f in result.files}
+    assert roles == {".htm": "assignment", ".pka": "project"}
+    text = next(iter(result.extracted_text_files.values()))
+    assert "Step 1: Add network devices to the workspace." in text and "\u2013 ping cisco.srv" in text
+    assert "color: red" not in text

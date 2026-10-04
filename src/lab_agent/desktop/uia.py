@@ -125,6 +125,10 @@ class PywinautoDriver:
                 criteria["auto_id"] = value
             elif key == "process":
                 continue
+            elif key == "title_re":
+                # pywinauto anchors title_re at the start (re.match); selectors mean "anywhere in the title", as in
+                # the fake driver - "Create_a_Simple_Network" must match "Cisco Packet Tracer - ...\Create_a_Simple_Network.pka".
+                criteria[key] = f".*(?:{value})"
             else:
                 criteria[key] = value
         return criteria

@@ -159,3 +159,15 @@ def test_lifecycle_dismisses_declared_popups(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(ExecutionContext, "sleep", lambda self, seconds: None)
     app = ManagedApplication("wireshark", ExecutionContext(tmp_path, "a"), driver_factory=lambda: driver)
     assert app.wait_ready(timeout=2) is not None and update.closed
+
+
+def test_pywinauto_title_regex_matches_anywhere_in_the_title() -> None:
+    """pywinauto anchors title_re at the start; selectors mean 'anywhere', like the fake driver."""
+    import re
+
+    from lab_agent.desktop.uia import PywinautoDriver
+
+    criteria = PywinautoDriver._criteria({"title_re": "Create_a_Simple_Network", "class_name": "CAppWindow"})
+    assert re.match(criteria["title_re"], r"Cisco Packet Tracer - C:\ws\input\Create_a_Simple_Network.pka - Guest")
+    anchored = PywinautoDriver._criteria({"title_re": "^R1$"})["title_re"]
+    assert re.match(anchored, "R1") and not re.match(anchored, "R10")

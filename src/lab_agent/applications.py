@@ -55,6 +55,9 @@ class ManagedApplication:
         self._launcher = launcher
         self.process: subprocess.Popen[bytes] | None = None
         self.window: Any = None
+        # Set when several instances may be open (e.g. the student's own Packet Tracer next to the one the agent
+        # opened): every lookup, screenshot and close then targets this window only.
+        self.selector_override: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ discovery
     def executable(self) -> str:
@@ -88,6 +91,8 @@ class ManagedApplication:
 
     @property
     def window_selector(self) -> dict[str, Any]:
+        if self.selector_override:
+            return dict(self.selector_override)
         selector = self.profile.get("window")
         if not selector:
             raise ValueError(f"Profile {self.name} has no window selector")
