@@ -123,6 +123,34 @@ lab-agent lint-report  .\Surname_week2.docx                         # прове
 Дисковые утилиты получают только файл образа из workspace (не физический диск); окно с `pwsh`/`cmd` — это произвольные
 команды, поэтому оно разрешено только при `policy.powershell.arbitrary: true`.
 
+## Packet Tracer: схема как у студента
+
+Холст Packet Tracer недоступен для UI Automation, но всё вокруг него доступно: кнопки панели устройств и кабелей
+(по именам `PC-PT`, `Copper Straight-Through`…), меню свободных портов и окна устройств. Поэтому агент:
+
+- ставит устройство, перетаскивая его модель с панели на свободное место холста (`add_device`), и даёт ему имя
+  через Config → Display Name (`rename_device`); можно писать обычные названия: PC, Laptop, Cable Modem, 2911, 2960;
+- находит устройства на холсте **обходом** (`survey_canvas`): ищет иконки на снимке окна, кликает каждую и читает
+  заголовок открывшегося окна. Каждая координата подтверждена реальным окном устройства, без OCR и угадывания;
+- прокладывает кабель (`connect_devices`), выбирая порты по имени в меню Packet Tracer; если порт занят, шаг падает
+  со списком свободных портов;
+- настраивает PC (`configure_pc` со `dhcp: true` или статикой) и проверяет `ping` по IP или имени (`cisco.srv`).
+
+```yaml
+- packet_tracer.open_project:    {file: input/Create_a_Simple_Network_pka.pka}   # .pka открывается в режиме Guest
+- packet_tracer.add_device:      {model: PC, device: PC, near: Wireless Router}
+- packet_tracer.add_device:      {model: Cable Modem, device: Cable Modem}
+- packet_tracer.connect_devices: {a: "PC:FastEthernet0", b: "Wireless Router:Ethernet 1", cable: straight}
+- packet_tracer.connect_devices: {a: "Cable Modem:Port 0", b: "Internet:Coaxial7", cable: coaxial}
+- packet_tracer.configure_pc:    {device: PC, dhcp: true}
+- packet_tracer.verify_connectivity: {source: PC, target: cisco.srv, min_received: 3}
+```
+
+Эти шаги двигают настоящую мышь: перед ними агент предупреждает, а ввод отправляется, только если окно Packet Tracer
+на переднем плане (иначе шаг BLOCKED). Детерминированный планировщик сам такие шаги из текста лабы не составляет —
+их планирует AI-провайдер (`--ai-provider codex`) или пишет человек. Не автоматизировано: замена модулей на вкладке
+Physical и подключение к Wi-Fi через PC Wireless.
+
 ## Workspace
 
 ```text

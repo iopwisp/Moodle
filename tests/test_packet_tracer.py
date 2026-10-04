@@ -95,10 +95,13 @@ def test_device_window_missing_asks_the_user(pt, registry) -> None:
         registry.execute("packet_tracer.enter_command", {"device": "R9", "command": "show ip interface brief"}, context)
 
 
-def test_canvas_actions_are_blocked_without_profile_support(pt, registry) -> None:
+def test_canvas_actions_need_a_real_window(pt, registry) -> None:
+    """Without a real window handle the canvas steps must never fall back to moving the real mouse."""
     context, _ = pt
-    assert registry.execute("packet_tracer.add_device", {"device": "R3", "model": "2911"}, context).blocked
-    assert registry.execute("packet_tracer.connect_devices", {"a": "R1:G0/0", "b": "SW1:F0/1"}, context).blocked
+    with pytest.raises(CapabilityBlocked, match="real Packet Tracer window"):
+        registry.execute("packet_tracer.add_device", {"device": "R3", "model": "2911"}, context)
+    with pytest.raises(CapabilityBlocked, match="real Packet Tracer window"):
+        registry.execute("packet_tracer.connect_devices", {"a": "R1:G0/0", "b": "SW1:F0/1"}, context)
 
 
 def test_create_topology_writes_configs(tmp_path: Path, registry) -> None:

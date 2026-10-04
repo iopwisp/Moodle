@@ -37,11 +37,12 @@ class FakeControl:
     text: str = ""
     on_click: Callable[[], None] | None = None
     on_type: Callable[[str], None] | None = None
+    rect: tuple[int, int, int, int] = (0, 0, 10, 10)
 
     def info(self, index: int) -> dict[str, Any]:
         return {"index": index, "depth": 1, "name": self.name, "control_type": self.control_type,
                 "automation_id": self.automation_id, "class_name": self.class_name, "enabled": self.enabled,
-                "visible": self.visible, "rect": [0, 0, 10, 10]}
+                "visible": self.visible, "rect": list(self.rect)}
 
 
 @dataclass
@@ -51,6 +52,7 @@ class FakeWindow:
     class_name: str = "FakeWindow"
     visible: bool = True
     closed: bool = False
+    rect: tuple[int, int, int, int] = (0, 0, 800, 600)
 
     def info(self) -> dict[str, Any]:
         return {"name": self.name, "class_name": self.class_name, "visible": self.visible, "control_type": "Window"}
@@ -83,9 +85,12 @@ class FakeDriver:
 
     def find_control(self, window: FakeWindow, selector: dict[str, Any], timeout: float = 10) -> FakeControl | None:
         for option in alternatives(selector):
+            wanted, seen = int(option.get("found_index", 0)), 0
             for index, control in enumerate(window.controls):
                 if control.visible and element_matches(control.info(index), option):
-                    return control
+                    if seen == wanted:
+                        return control
+                    seen += 1
         return None
 
     def snapshot(self, window: FakeWindow, max_depth: int = 6, limit: int = 400) -> list[dict[str, Any]]:
@@ -133,6 +138,9 @@ class FakeDriver:
 
     def window_title(self, window: FakeWindow) -> str:
         return window.name
+
+    def rectangle(self, element: FakeControl | FakeWindow) -> tuple[int, int, int, int]:
+        return element.rect
 
 
 class FakeIOSConsole:

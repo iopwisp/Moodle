@@ -10,7 +10,8 @@ window_timeout_seconds: 120
 ready_settle_seconds: 2
 command_delay_seconds: 0.4
 output_settle_seconds: 1.0
-ping_wait_seconds: 6
+ping_timeout_seconds: 60   # a ping in realtime mode takes 20-35 s (4 echoes)
+ping_poll_seconds: 2
 
 # Dialogs that stop automation and need the student (human-in-the-loop).
 blockers:
@@ -27,7 +28,7 @@ device_tabs:
   CLI: {title: CLI, control_type: TabItem}
   Command Prompt:
     - {title: Desktop, control_type: TabItem}
-    - {title_re: "^Command Prompt$"}
+    - {title_re: '^Command\s+Prompt$'}  # PT 8.2.2 names the Desktop button "Command<newline>Prompt"
 console: {any: [{control_type: Edit}, {control_type: Document}]}
 
 operations:
@@ -49,3 +50,65 @@ notes: >
   Canvas actions (placing devices, drawing cables) have no accessibility controls and are not declared here;
   the agent asks the student to perform them (BLOCKED with instructions) and verifies the result through the CLI.
   Selectors marked in this file must be confirmed with `lab-agent` desktop.observe on your Packet Tracer version.
+
+# Canvas automation (integrations/pt_canvas.py). Device-type panel buttons are found through UI Automation by these
+# names (class CDeviceButton); recorded from Packet Tracer 8.2.2 on 2026-10-05.
+canvas:
+  catalog:
+    Network Devices:
+      Routers: ["1841", "1941", "2620XM", "2621XM", "2901", "2911", "819HG-4G-IOX", "819HGW", "829", "CGR1240", "ISR4321",
+                "ISR4331", "Router-PT", "Router-PT-Empty", "2811 IOS15"]
+      Switches: ["2960 IOS15", "2950-24", "2950T-24", "Switch-PT", "Switch-PT-Empty", "3560-24PS", "3650-24PS", "IE-2000", "Bridge-PT"]
+      Hubs: ["Hub-PT", "Repeater-PT", "CoAxialSplitter-PT"]
+      Wireless Devices: ["AccessPoint-PT", "AccessPoint-PT-A", "AccessPoint-PT-AC", "AccessPoint-PT-N", "Linksys-WRT300N",
+                         "HomeRouter-PT-AC", "DLC100", "Cell-Tower", "Central-Office-Server", "WLC-2504", "WLC-3504", "WLC-PT",
+                         "3702i", "LAP-PT", "Meraki-MX65W"]
+      Security: ["5505", "5506-X"]
+      WAN Emulation: ["Cloud-PT", "Cloud-PT-Empty", "DSL-Modem-PT", "Cable-Modem-PT"]
+    End Devices:
+      End Devices: ["PC-PT", "Laptop-PT", "Server-PT", "Meraki-Server", "NetworkController", "Printer-PT", "7960", "Home-VoIP-PT",
+                    "Analog-Phone-PT", "TV-PT", "TabletPC-PT", "SMARTPHONE-PT", "WirelessEndDevice-PT", "WiredEndDevice-PT", "Sniffer"]
+    Miscellaneous:
+      Miscellaneous: ["1841 WIC-2T", "2621XM NM-2FE2W (2) WIC-2T", "2811 with IOS 12", "2811 NM-ESW-161 (2) WIC-2T",
+                      "2960 with IOS 12", "Wireless Laptop", "Wireless PC"]
+  # Everyday names used by lab instructions -> panel button.
+  aliases:
+    PC: PC-PT
+    Laptop: Laptop-PT
+    Server: Server-PT
+    Printer: Printer-PT
+    Tablet: TabletPC-PT
+    Smartphone: SMARTPHONE-PT
+    IP Phone: "7960"
+    Cable Modem: Cable-Modem-PT
+    DSL Modem: DSL-Modem-PT
+    Cloud: Cloud-PT
+    Internet: Cloud-PT
+    Wireless Router: Linksys-WRT300N
+    WRT300N: Linksys-WRT300N
+    Home Router: HomeRouter-PT-AC
+    Access Point: AccessPoint-PT
+    Hub: Hub-PT
+    Router: Router-PT
+    Switch: "2960 IOS15"
+    "2960": "2960 IOS15"
+    "2811": "2811 IOS15"
+    "4321": ISR4321
+    "4331": ISR4331
+    ASA: "5506-X"
+  cables:
+    auto: Automatically Choose Connection Type
+    console: Console
+    straight: Copper Straight-Through
+    straight-through: Copper Straight-Through
+    copper: Copper Straight-Through
+    cross: Copper Cross-Over
+    crossover: Copper Cross-Over
+    fiber: Fiber
+    phone: Phone
+    coaxial: Coaxial
+    serial: Serial DCE
+    serial-dce: Serial DCE
+    serial-dte: Serial DTE
+    octal: Octal
+    usb: USB

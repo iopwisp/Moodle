@@ -16,12 +16,11 @@ What is automated, and how it is verified:
 * **Save** (``save_project``): the .pkt must exist afterwards with a newer
   modification time and non-JSON binary content.
 
-Packet Tracer's logical workspace is a drawing canvas without accessibility
-controls, so placing/cabling devices (``add_device``/``connect_devices``) can
-only run when the installed profile declares verified UIA steps for them;
-otherwise the step is BLOCKED with instructions (human-in-the-loop) instead of
-pretending.  Device windows are opened by the student clicking the device once
-when the profile cannot open them.
+* **Canvas** (``add_device``/``connect_devices``/``rename_device``/
+  ``survey_canvas``): see :mod:`.pt_canvas` - panel buttons and port menus are
+  found through UI Automation by name, devices on the canvas by clicking icon
+  blobs and reading the device window each one opens.  These steps move the
+  real mouse, so they are marked interactive.
 """
 
 from __future__ import annotations
@@ -41,6 +40,7 @@ from .base import (
     IntegrationResult,
     Param,
     evidence,
+    param_bool,
     param_dict,
     param_int,
     param_list,
@@ -211,7 +211,8 @@ def parse_ping(text: str) -> dict[str, Any] | None:
 class PacketTracerAdapter(BaseIntegration):
     name = "packet_tracer"
     APPLICATIONS = (PT_SPEC,)
-    INTERACTIVE = frozenset({"packet_tracer.open_project", "packet_tracer.add_device", "packet_tracer.connect_devices", "packet_tracer.open_cli", "packet_tracer.enter_command", "packet_tracer.configure_router", "packet_tracer.configure_switch", "packet_tracer.configure_pc", "packet_tracer.verify_connectivity", "packet_tracer.save_project"})
+    INTERACTIVE = frozenset({"packet_tracer.open_project", "packet_tracer.add_device", "packet_tracer.connect_devices",
+                             "packet_tracer.rename_device", "packet_tracer.survey_canvas", "packet_tracer.open_cli", "packet_tracer.enter_command", "packet_tracer.configure_router", "packet_tracer.configure_switch", "packet_tracer.configure_pc", "packet_tracer.verify_connectivity", "packet_tracer.save_project"})
     CAPABILITIES = (
         Capability("packet_tracer.launch", "packet_tracer", "Start Packet Tracer and wait for the main window", (), ("screenshot",),
                    "main window visible (login walls are reported as BLOCKED)", requires=("app:packet_tracer",),
@@ -224,11 +225,23 @@ class PacketTracerAdapter(BaseIntegration):
         Capability("packet_tracer.validate_addressing", "packet_tracer",
                    "Static addressing check + model-based reachability matrix for the topology", (TOPOLOGY, TOPOLOGY_FILE),
                    ("json",), "no duplicate IPs, links share subnets, gateways valid"),
-        Capability("packet_tracer.add_device", "packet_tracer", "Place a device on the canvas (needs profile support)",
-                   (DEVICE, Param("model", "str", True)), ("screenshot",), "device window can be opened", requires=("app:packet_tracer",)),
-        Capability("packet_tracer.connect_devices", "packet_tracer", "Cable two device ports (needs profile support)",
-                   (Param("a", "str", True, "R1:GigabitEthernet0/0"), Param("b", "str", True)), ("screenshot",),
-                   "link shown in device port status", requires=("app:packet_tracer",)),
+        Capability("packet_tracer.add_device", "packet_tracer", "Drag a device model onto the canvas and give it a display name",
+                   (Param("device", "str", False, "display name to give it, e.g. PC; empty keeps Packet Tracer's name"),
+                    Param("model", "str", True, "panel model or everyday name: PC, Laptop, Cable Modem, 2911, 2960 ..."),
+                    Param("near", "str", False, "place it below this existing device"),
+                    Param("at", "list", False, "[x, y] as fractions of the visible canvas")),
+                   ("screenshot",), "the new device's window opens with the requested name", requires=("app:packet_tracer",),
+                   keywords=("add device", "drag and drop", "device-type selection")),
+        Capability("packet_tracer.connect_devices", "packet_tracer", "Cable two device ports",
+                   (Param("a", "str", True, "device:port, e.g. PC:FastEthernet0"), Param("b", "str", True, "Wireless Router:Ethernet 1"),
+                    Param("cable", "str", False, "straight | cross | coaxial | console | serial-dce | serial-dte | fiber | auto")),
+                   ("screenshot",), "both ports were chosen from Packet Tracer's own port menus", requires=("app:packet_tracer",),
+                   keywords=("cable", "cabling", "кабель", "straight-through")),
+        Capability("packet_tracer.rename_device", "packet_tracer", "Change a device's display name (Config tab)",
+                   (DEVICE, Param("name", "str", True, "new display name")), ("screenshot",),
+                   "the device window is titled with the new name", requires=("app:packet_tracer",), keywords=("display name",)),
+        Capability("packet_tracer.survey_canvas", "packet_tracer", "Map every device on the visible canvas by clicking it",
+                   (), ("json",), "every icon opened a named device window", requires=("app:packet_tracer",)),
         Capability("packet_tracer.open_cli", "packet_tracer", "Bring the device window to the CLI tab", (DEVICE,), (),
                    "CLI console of the device is visible", requires=("app:packet_tracer",)),
         Capability("packet_tracer.enter_command", "packet_tracer", "Type one IOS command in the device CLI and record the output",
@@ -242,11 +255,13 @@ class PacketTracerAdapter(BaseIntegration):
                    (DEVICE, Param("commands", "list", False), Param("from_topology", "bool", False)), ("command_output",),
                    "no IOS errors; show running-config contains the configured lines", requires=("app:packet_tracer",),
                    keywords=("switch", "коммутатор", "vlan")),
-        Capability("packet_tracer.configure_pc", "packet_tracer", "Set a PC's IP/mask/gateway via Command Prompt ipconfig",
-                   (DEVICE, Param("ip", "str", True, "192.168.1.10/24"), Param("gateway", "str")), ("command_output",),
+        Capability("packet_tracer.configure_pc", "packet_tracer", "Set a PC's address via Command Prompt (static ipconfig or DHCP)",
+                   (DEVICE, Param("ip", "str", False, "192.168.1.10/24; omit with dhcp=true"), Param("gateway", "str"),
+                    Param("dhcp", "bool", False, "ipconfig /renew-style DHCP request instead of a static address")),
+                   ("command_output",),
                    "ipconfig output shows the address", requires=("app:packet_tracer",)),
         Capability("packet_tracer.verify_connectivity", "packet_tracer", "Ping from a PC/device and parse the statistics",
-                   (Param("source", "str", True), Param("target", "str", True, "IP address"), Param("min_received", "int")),
+                   (Param("source", "str", True), Param("target", "str", True, "IP address or host name"), Param("min_received", "int")),
                    ("command_output", "screenshot"), "received replies >= min_received (default 1)", requires=("app:packet_tracer",),
                    keywords=("ping", "пинг", "connectivity", "связност")),
         Capability("packet_tracer.capture_topology", "packet_tracer", "Screenshot of the Packet Tracer main window",
@@ -341,6 +356,24 @@ class PacketTracerAdapter(BaseIntegration):
                                  [evidence(picture, f"{project.name} opened in Packet Tracer", "screenshot")],
                                  checks=[{"type": "window_exists", "title_re": re.escape(project.stem)}])
 
+    def _open_from_canvas(self, app: Any, device: str, context: ExecutionContext) -> None:
+        """Open a device's window by clicking it on the canvas when it is not open yet (real Packet Tracer only)."""
+        if app.driver.find_window({"title_re": f"^{re.escape(device)}$"}, timeout=0) is not None:
+            return
+        window = app.running_window()
+        if self.pointer_factory is None and not getattr(window, "handle", None):
+            return  # no real window: _device_window asks the student
+        from ..desktop.pointer import InputRefused
+        from .pt_canvas import CanvasError
+
+        canvas, _ = self._canvas(context)
+        try:
+            canvas.open_device(device)
+        except InputRefused as exc:
+            raise CapabilityBlocked(str(exc)) from exc
+        except CanvasError:
+            return  # _device_window reports it
+
     def _device_window(self, app: Any, device: str) -> Any:
         selector = {"title_re": f"^{re.escape(device)}$"}
         window = app.driver.find_window(selector, timeout=2)
@@ -357,12 +390,15 @@ class PacketTracerAdapter(BaseIntegration):
         driver.focus(window)
         tabs = app.profile.get("device_tabs", {})
         path = tabs.get(tab, {"title": tab, "control_type": "TabItem"})
-        for selector in path if isinstance(path, list) else [path]:
-            control = driver.find_control(window, selector, timeout=5)
+        console_selector = app.profile.get("console", {"control_type": "Edit"})
+        for index, selector in enumerate(path if isinstance(path, list) else [path]):
+            control = driver.find_control(window, selector, timeout=5 if index == 0 else 2)
             if control is None:
+                # Desktop > Command Prompt: once the app is open its launcher button is gone and the console shows
+                if index > 0 and driver.find_control(window, console_selector, timeout=1) is not None:
+                    break
                 raise CapabilityBlocked(f"{device} has no '{tab}' view ({selector}); is it the right device type?")
             driver.click(control)
-        console_selector = app.profile.get("console", {"control_type": "Edit"})
         console = driver.find_control(window, console_selector, timeout=5)
         if console is None:
             raise RuntimeError(f"The {tab} console of {device} was not found; update profiles/packet_tracer.yaml selectors")
@@ -383,6 +419,7 @@ class PacketTracerAdapter(BaseIntegration):
         app = self._app(context)
         if app.running_window() is None:
             raise CapabilityBlocked("Packet Tracer is not running; run packet_tracer.launch/open_project first.")
+        self._open_from_canvas(app, device, context)
         _, console = self._console(app, device, tab)
         output = self._type_lines(app, console, ["", *lines], context)
         errors = [line for line in output.splitlines() if any(marker in line for marker in CLI_ERRORS)]
@@ -430,6 +467,17 @@ class PacketTracerAdapter(BaseIntegration):
 
     def configure_pc(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         device = param_str(parameters, "device")
+        if param_bool(parameters, "dhcp"):
+            output, _ = self._run_cli(device, ["ipconfig /renew", "ipconfig"], context, tab="Command Prompt")
+            leased = re.findall(r"IP(?:v4)? Address[ .]*: *(\d+\.\d+\.\d+\.\d+)", output)
+            address = next((ip for ip in reversed(leased) if not ip.startswith(("0.", "169.254."))), "")
+            path = context.save_result(f"pt_{device}_ipconfig.txt", output)
+            return IntegrationResult(bool(address), {"device": device, "ip": address, "dhcp": True,
+                                                     **({} if address else {"reason": "no DHCP lease shown by ipconfig"})},
+                                     [evidence(path, f"{device} ipconfig (DHCP)", "command_output")],
+                                     checks=[{"type": "text_contains", "path": f"results/{path.name}", "value": address or "no lease"}])
+        if not param_str(parameters, "ip"):
+            raise ValueError("ip is required unless dhcp is true")
         iface = ipaddress.IPv4Interface(param_str(parameters, "ip"))
         gateway = param_str(parameters, "gateway")
         command = f"ipconfig {iface.ip} {iface.netmask}" + (f" {gateway}" if gateway else "")
@@ -442,17 +490,28 @@ class PacketTracerAdapter(BaseIntegration):
 
     def verify_connectivity(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         source, target = param_str(parameters, "source"), param_str(parameters, "target")
-        ipaddress.IPv4Address(target)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", target):  # an IPv4 address or a name such as cisco.srv
+            raise ValueError(f"target must be an IP address or host name, not {target!r}")
         minimum = param_int(parameters, "min_received", 1)
         app = self._app(context)
         devices = (_load_topology({}, context).get("devices", {}) if (self._folder(context) / "topology.json").is_file() else {})
         kind = str(devices.get(source, {}).get("type", "pc")).lower()
         tab = "CLI" if kind in {"router", "switch", "l3switch"} else "Command Prompt"
         output, _ = self._run_cli(source, [f"ping {target}"], context, tab=tab)
-        context.sleep(float(app.profile.get("ping_wait_seconds", 6)))
         _, console = self._console(app, source, tab)
-        full = app.driver.read_text(console)
-        stats = parse_ping(full[-4000:]) or parse_ping(output)
+        # A PT ping takes 20-35 s in realtime mode: poll the console until this ping's statistics appear.
+        interval = float(app.profile.get("ping_poll_seconds", 2))
+        polls = max(1, int(float(app.profile.get("ping_timeout_seconds", 60)) / interval))
+        stats = None
+        full = ""
+        for _ in range(polls):
+            full = app.driver.read_text(console)
+            latest = full.rfind(f"ping {target}")
+            stats = parse_ping(full[latest:] if latest >= 0 else full[-4000:])
+            if stats is not None:
+                break
+            context.sleep(interval)
+        stats = stats or parse_ping(output)
         path = context.save_result(f"pt_ping_{source}_{target.replace('.', '_')}.txt", full[-4000:])
         items = [evidence(path, f"ping {target} from {source}", "command_output")]
         try:
@@ -464,28 +523,90 @@ class PacketTracerAdapter(BaseIntegration):
         return IntegrationResult(ok, {"source": source, "target": target, "stats": stats, **reason}, items,
                                  checks=[{"type": "details_value", "key": "stats.received", "min": minimum}])
 
-    def add_device(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+    # ------------------------------------------------------------------ canvas
+    pointer_factory: Any = None  # tests inject a fake; default: lab_agent.desktop.pointer.RealPointer
+
+    def _canvas(self, context: ExecutionContext) -> Any:
+        from .pt_canvas import CanvasState, PTCanvas
+
         app = self._app(context)
-        if not app.has_operation("add_device"):
-            return IntegrationResult.blocked_result(
-                "Packet Tracer's canvas has no accessibility controls for placing devices. Place "
-                f"{param_str(parameters, 'model')} named {param_str(parameters, 'device')} (or open the lab's .pkt), then resume.")
-        app.launch()
-        app.run_operation("add_device", {"device": param_str(parameters, "device"), "model": param_str(parameters, "model")})
-        self._device_window(app, param_str(parameters, "device"))
-        picture = app.screenshot(f"pt_add_{context.stamp()}.png")
-        return IntegrationResult(True, {}, [evidence(picture, "Device added", "screenshot")])
+        window = app.running_window()
+        if window is None:
+            raise CapabilityBlocked("Packet Tracer is not open; run packet_tracer.open_project first.")
+        if self.pointer_factory is None:
+            if not getattr(window, "handle", None):
+                raise CapabilityBlocked("Canvas automation needs a real Packet Tracer window on Windows.")
+            from ..desktop.pointer import RealPointer
+
+            try:
+                pointer = RealPointer()
+            except RuntimeError as exc:
+                raise CapabilityBlocked(str(exc)) from exc
+        else:
+            pointer = self.pointer_factory()
+        state = CanvasState.load(context.folder("working") / "pt_canvas.json")
+        return PTCanvas(app.driver, window, pointer, app.profile, state=state, sleep=context.sleep), app
+
+    def _canvas_step(self, context: ExecutionContext, work: Any, label: str) -> IntegrationResult:
+        from ..desktop.pointer import InputRefused
+        from .pt_canvas import CanvasError
+
+        canvas, app = self._canvas(context)
+        try:
+            details = work(canvas)
+        except InputRefused as exc:
+            raise CapabilityBlocked(str(exc)) from exc
+        except (CanvasError, ValueError) as exc:
+            picture = app.screenshot(f"pt_{label}_failed_{context.stamp()}.png")
+            return IntegrationResult(False, {"reason": str(exc)}, [evidence(picture, f"Canvas when {label} failed", "screenshot")])
+        picture = app.screenshot(f"pt_{label}_{context.stamp()}.png")
+        record = context.save_result(f"pt_{label}_{context.step_id or 0:02d}.json", details)
+        return IntegrationResult(True, details, [evidence(picture, f"Packet Tracer after {label}", "screenshot"),
+                                                 evidence(record, f"{label} details", "json")],
+                                 checks=[{"type": "image_valid", "path": f"screenshots/{picture.name}"}])
+
+    def add_device(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        model, wanted = param_str(parameters, "model"), param_str(parameters, "device")
+        spot = [float(v) for v in param_list(parameters, "at")]
+        if spot and (len(spot) != 2 or not all(0 <= v <= 1 for v in spot)):
+            raise ValueError("at must be [x, y] fractions between 0 and 1")
+
+        def work(canvas: Any) -> dict[str, Any]:
+            created, point = canvas.place(model, at=tuple(spot) if spot else None, near=param_str(parameters, "near") or None)
+            if wanted and wanted != created:
+                canvas.rename(created, wanted)
+            return {"model": model, "created_as": created, "device": wanted or created, "point": list(point)}
+
+        return self._canvas_step(context, work, "add_device")
 
     def connect_devices(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
-        app = self._app(context)
-        if not app.has_operation("connect_devices"):
-            return IntegrationResult.blocked_result(
-                f"Cable {param_str(parameters, 'a')} to {param_str(parameters, 'b')} in Packet Tracer (canvas action), then resume; "
-                "the agent verifies the link with 'show ip interface brief'.")
-        app.launch()
-        app.run_operation("connect_devices", {"a": param_str(parameters, "a"), "b": param_str(parameters, "b")})
-        picture = app.screenshot(f"pt_link_{context.stamp()}.png")
-        return IntegrationResult(True, {}, [evidence(picture, "Devices connected", "screenshot")])
+        ends = []
+        for key in ("a", "b"):
+            device, _, port = param_str(parameters, key).partition(":")
+            if not device.strip():
+                raise ValueError(f"{key} must be 'device:port', e.g. PC:FastEthernet0")
+            ends.append((device.strip(), port.strip()))
+        cable = param_str(parameters, "cable", "straight") or "straight"
+        return self._canvas_step(context, lambda canvas: canvas.connect(ends[0][0], ends[0][1], ends[1][0], ends[1][1], cable),
+                                 "connect")
+
+    def rename_device(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        device, name = param_str(parameters, "device"), param_str(parameters, "name")
+
+        def work(canvas: Any) -> dict[str, Any]:
+            canvas.rename(device, name)
+            return {"device": device, "name": name}
+
+        return self._canvas_step(context, work, "rename")
+
+    def survey_canvas(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        def work(canvas: Any) -> dict[str, Any]:
+            devices = canvas.survey()
+            if not devices:
+                raise ValueError("No device window opened from any icon on the visible canvas.")
+            return {"devices": devices}
+
+        return self._canvas_step(context, work, "survey")
 
     def capture_topology(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         app = self._app(context)

@@ -93,6 +93,7 @@ class UIDriver(Protocol):
     def read_value(self, control: Any) -> str: ...
     def close(self, window: Any) -> None: ...
     def window_title(self, window: Any) -> str: ...
+    def rectangle(self, element: Any) -> tuple[int, int, int, int]: ...
 
 
 def fingerprint(elements: list[dict[str, Any]], title: str = "") -> str:
@@ -313,3 +314,7 @@ class PywinautoDriver:
 
     def window_title(self, window: Any) -> str:
         return str(window.window_text())
+
+    def rectangle(self, element: Any) -> tuple[int, int, int, int]:
+        rect = element.rectangle()
+        return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)

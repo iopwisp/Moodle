@@ -87,6 +87,10 @@ Student ID оставлять пустым, если пользователь е
   Профиль: `profiles/packet_tracer.yaml`. Файлы `.pka/.pkt` зашифрованы — читать их как текст нельзя.
   В PT есть IPC API (`help/default/IpcAPI`, класс `Simulation`: `setSimulationMode`, `forward`,
   `getFrameInstanceAt`) — путь к автоматизации симуляции через Script Module или ExApp (PTMP, TCP 39000); не сделано.
+  **Холст автоматизирован** (`integrations/pt_canvas.py`): `add_device`, `rename_device`, `survey_canvas`,
+  `connect_devices`, `configure_pc dhcp`, `verify_connectivity` — проверено на реальном PT (см. README). `.pka`
+  открывается в режиме Guest без входа. Экран 2560x1440 при 150 %: координаты снимка брать из Win32 GetWindowRect,
+  не из UIA-прямоугольника окна (сдвиг на ~40 px).
 - **Burp Community 2026.8:** горячие клавиши работают только когда окно Burp в фокусе.
 
 ## AI-планировщик агента
