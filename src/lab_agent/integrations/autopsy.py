@@ -4,9 +4,13 @@ Forensic work is driven through Autopsy's supported command-line mode
 (``--createCase``, ``--addDataSource``, ``--runIngest``, ``--generateReports``),
 which is deterministic and scriptable.  Results are verified by reading the
 case database (``autopsy.db``, SQLite): data sources, finished ingest jobs,
-files and blackboard artifacts.  The GUI is opened afterwards with
-``--caseDir`` for window-targeted screenshots.  Any failure is reported; no
+files and blackboard artifacts.  The GUI is opened afterwards on the case's
+``.aut`` file for window-targeted screenshots.  Any failure is reported; no
 step is marked verified from the exit code alone.
+
+Autopsy has no ``--caseDir`` option ("Unrecognized option", verified on 4.23.1):
+an existing case is addressed by ``--caseBaseDir=<parent> --caseName=<name>``,
+and Autopsy finds the timestamped case folder itself.
 """
 
 from __future__ import annotations
@@ -40,6 +44,14 @@ AUTOPSY_SPEC = AppSpec(
     capabilities=("autopsy.*",),
 )
 INGEST_COMPLETED = {"completed", "2"}
+
+
+def case_args(case_dir: Path) -> list[str]:
+    """Command-line options that make Autopsy open the existing case in ``case_dir``."""
+    aut = next(iter(sorted(case_dir.glob("*.aut"))), None)
+    if aut is None:
+        raise FileNotFoundError(f"No Autopsy case file (*.aut) in {case_dir}")
+    return [f"--caseBaseDir={case_dir.parent}", f"--caseName={aut.stem}"]
 
 
 def _safe_name(text: str) -> str:
@@ -87,6 +99,18 @@ def case_summary(case_dir: Path) -> dict[str, Any]:
         summary["artifacts"] = artifacts
     summary["ingest_completed"] = bool(jobs) and all(str(job.get("status", "")).casefold() in INGEST_COMPLETED for job in jobs)
     return summary
+
+
+def pending_data_sources(case_dir: Path) -> list[int]:
+    """Object ids of data sources that have no completed ingest job yet."""
+    with sqlite3.connect(f"file:{case_database(case_dir).as_posix()}?mode=ro", uri=True) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "data_source_info" not in tables:
+            return []
+        ids = [int(row[0]) for row in connection.execute("SELECT obj_id FROM data_source_info ORDER BY obj_id")]
+        done = {int(row[0]) for row in connection.execute("SELECT obj_id FROM ingest_jobs WHERE status_id = 2")} \
+            if "ingest_jobs" in tables else set()
+    return [object_id for object_id in ids if object_id not in done]
 
 
 class AutopsyAdapter(AutopsyNarration, BaseIntegration):
@@ -223,7 +247,7 @@ class AutopsyAdapter(AutopsyNarration, BaseIntegration):
     def add_data_source(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         case_dir = self._case_dir(parameters, context)
         source = self._data_source(parameters, context)
-        details, log = self._run(context, [f"--caseDir={case_dir}", "--addDataSource", f"--dataSourcePath={source}"], "add_data_source")
+        details, log = self._run(context, [*case_args(case_dir), "--addDataSource", f"--dataSourcePath={source}"], "add_data_source")
         if details["exit_code"] != 0:
             return IntegrationResult.failed(f"Autopsy --addDataSource exited with {details['exit_code']}", **details)
         self._save_state(context, data_source=str(source))
@@ -242,11 +266,24 @@ class AutopsyAdapter(AutopsyNarration, BaseIntegration):
     def start_ingest(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         case_dir = self._case_dir(parameters, context)
         profile = param_str(parameters, "profile") or self._state(context).get("ingest_profile", "")
-        args = [f"--caseDir={case_dir}", "--runIngest"] + ([f"--ingestProfile={profile}"] if profile else [])
-        details, log = self._run(context, args, "ingest")
-        if details["exit_code"] != 0:
-            return IntegrationResult.failed(f"Autopsy --runIngest exited with {details['exit_code']}", **details)
-        return self._verified_summary(case_dir, context, details, [evidence(log, "Autopsy ingest log", "log")])
+        # On an existing case Autopsy ingests one data source per call and needs its object id
+        # ("'dataSourceId' argument is empty" otherwise, verified on 4.23.1).
+        pending = pending_data_sources(case_dir)
+        if not pending:
+            if not case_summary(case_dir)["data_sources"]:
+                return IntegrationResult.failed("The case has no data source to ingest; run autopsy.add_data_source first")
+            return self._verified_summary(case_dir, context, {"already_ingested": True}, [])
+        details: dict[str, Any] = {}
+        logs = []
+        for object_id in pending:
+            args = [*case_args(case_dir), "--runIngest", f"--dataSourceObjectId={object_id}"]
+            args += [f"--ingestProfile={profile}"] if profile else []
+            details, log = self._run(context, args, f"ingest_{object_id}")
+            logs.append(evidence(log, f"Autopsy ingest log (data source {object_id})", "log"))
+            if details["exit_code"] != 0:
+                return IntegrationResult.failed(f"Autopsy --runIngest exited with {details['exit_code']} "
+                                                f"for data source {object_id}", **details)
+        return self._verified_summary(case_dir, context, {**details, "ingested_data_sources": pending}, logs)
 
     def wait_for_completion(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         case_dir = self._case_dir(parameters, context)
@@ -357,7 +394,7 @@ class AutopsyAdapter(AutopsyNarration, BaseIntegration):
 
     def generate_report(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         case_dir = self._case_dir(parameters, context)
-        details, log = self._run(context, [f"--caseDir={case_dir}", "--generateReports"], "report")
+        details, log = self._run(context, [*case_args(case_dir), "--generateReports"], "report")
         reports = [p for p in (case_dir / "Reports").rglob("*") if p.is_file()] if (case_dir / "Reports").is_dir() else []
         if details["exit_code"] != 0 and not reports:
             output = f"{details.get('stdout', '')}\n{details.get('stderr', '')}"
@@ -380,9 +417,11 @@ class AutopsyAdapter(AutopsyNarration, BaseIntegration):
         from ..applications import ManagedApplication
 
         case_dir = self._case_dir(parameters, context)
-        aut = next(iter(case_dir.glob("*.aut")), None)
+        aut = next(iter(sorted(case_dir.glob("*.aut"))), None)
+        if aut is None:
+            return IntegrationResult.failed(f"No Autopsy case file (*.aut) in {case_dir}")
         app = ManagedApplication("autopsy", context, spec=AUTOPSY_SPEC)
-        app.launch([str(aut)] if aut else [f"--caseDir={case_dir}"], reuse=False)
+        app.launch([str(aut)], reuse=False)
         picture = app.screenshot(f"autopsy_case_{context.stamp()}.png")
         return IntegrationResult(True, {"case_dir": str(case_dir)},
                                  [evidence(picture, "Autopsy GUI with the analysed case", "screenshot")],

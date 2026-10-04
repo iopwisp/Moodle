@@ -1,0 +1,56 @@
+{
+  "source": "Observed with C:/Program Files/Autopsy-4.23.1/bin/autopsy64.exe on Windows 11 (2026-10-04).",
+  "recognized_options": [
+    "--nosplash",
+    "--createCase",
+    "--caseName",
+    "--caseBaseDir",
+    "--addDataSource",
+    "--dataSourcePath",
+    "--runIngest",
+    "--dataSourceObjectId",
+    "--ingestProfile",
+    "--generateReports",
+    "--listAllDataSources"
+  ],
+  "not_verified": [
+    "--ingestProfile"
+  ],
+  "unrecognized_exit_code": 50346,
+  "unrecognized_message": "Unrecognized option {option}",
+  "observed": [
+    {
+      "args": [
+        "--nosplash",
+        "--caseDir=<case>",
+        "--listAllDataSources"
+      ],
+      "exit_code": 50346,
+      "stderr_tail": "Unrecognized option --caseDir=<case>"
+    },
+    {
+      "args": [
+        "--nosplash",
+        "--caseBaseDir=<case parent>",
+        "--caseName=Assignment_3_agent",
+        "--listAllDataSources"
+      ],
+      "exit_code": 0,
+      "stdout_tail": "Processing 'List All Data Sources' command\nJob processing task finished",
+      "note": "The case folder is Assignment_3_agent_2026_09_30_16_18_21; Autopsy finds it from the name."
+    },
+    {
+      "args": [
+        "--nosplash",
+        "--caseBaseDir=<case parent>",
+        "--caseName=real_check",
+        "--runIngest"
+      ],
+      "exit_code": 4294967294,
+      "stderr_tail": "'dataSourceId' argument is empty",
+      "note": "--runIngest on an existing case needs --dataSourceObjectId=<data_source_info.obj_id>."
+    }
+  ],
+  "missing_data_source_exit_code": 4294967294,
+  "missing_data_source_message": "'dataSourceId' argument is empty"
+}

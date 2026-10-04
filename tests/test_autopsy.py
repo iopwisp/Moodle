@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +12,9 @@ from lab_agent.tools.process import CommandResult
 from lab_agent.verification import CheckContext, run_checks
 
 IMAGE_BYTES = b"\x00" * 512 + b"secret budget data" + b"\x00" * 494
+# What the real autopsy64.exe accepts, recorded from Autopsy 4.23.1. The fake rejects everything else,
+# otherwise a wrong option (like the old --caseDir) passes the tests and fails on the real program.
+REAL_CLI = json.loads((Path(__file__).parent / "fixtures" / "autopsy_cli_4.23.1.json").read_text(encoding="utf-8"))
 
 
 class FakeAutopsy:
@@ -23,6 +27,10 @@ class FakeAutopsy:
 
     def __call__(self, command: list[str], **kwargs: object) -> CommandResult:
         self.commands.append(command)
+        for part in command[1:]:
+            if part.split("=", 1)[0] not in REAL_CLI["recognized_options"]:
+                return CommandResult(command, REAL_CLI["unrecognized_exit_code"], "",
+                                     REAL_CLI["unrecognized_message"].format(option=part), 0.1)
         options = {part.split("=", 1)[0]: part.split("=", 1)[1] for part in command if part.startswith("--") and "=" in part}
         flags = set(command)
         if self.exit_code:
@@ -32,8 +40,15 @@ class FakeAutopsy:
             case_dir.mkdir(parents=True)
             (case_dir / f"{options['--caseName']}.aut").write_text("<AutopsyCase/>")
             self._schema(case_dir / "autopsy.db")
-        else:
-            case_dir = Path(options["--caseDir"])
+        else:  # an existing case: Autopsy looks it up by name under the base folder
+            name = options["--caseName"]
+            found = [p.parent for p in Path(options["--caseBaseDir"]).glob(f"{name}_*/{name}.aut")]
+            if not found:
+                return CommandResult(command, 1, "", f"Case {name} not found", 0.1)
+            case_dir = found[0]
+        if "--runIngest" in flags and "--addDataSource" not in flags and "--dataSourceObjectId" not in options:
+            return CommandResult(command, REAL_CLI["missing_data_source_exit_code"], "",
+                                 REAL_CLI["missing_data_source_message"], 0.1)
         db = case_dir / "autopsy.db"
         with sqlite3.connect(db) as connection:
             if "--addDataSource" in flags:
@@ -44,7 +59,8 @@ class FakeAutopsy:
                 connection.execute("INSERT INTO tsk_file_layout VALUES (2, 512, 18, 0)")
                 connection.execute("INSERT INTO tsk_files VALUES (3, 'Unalloc_1', '/$Unalloc/', 494, NULL, 1, 1, 1, 4)")
             if "--runIngest" in flags:
-                connection.execute("INSERT INTO ingest_jobs VALUES (1, 1, 'host', 0, 1, ?, '')", (self.ingest_status,))
+                object_id = int(options.get("--dataSourceObjectId", 1))
+                connection.execute("INSERT INTO ingest_jobs VALUES (1, ?, 'host', 0, 1, ?, '')", (object_id, self.ingest_status))
                 connection.execute("INSERT INTO blackboard_artifacts VALUES (1, 2, 9)")
         if "--generateReports" in flags:
             reports = case_dir / "Reports" / "HTML Report"
@@ -185,3 +201,34 @@ def test_gui_evidence_uses_window(autopsy_context: ExecutionContext, registry, m
     result = registry.execute("autopsy.open_case_gui", {}, autopsy_context)
     assert result.verified and result.evidence[0]["type"] == "screenshot"
     assert launched and launched[0][0].endswith(".aut")
+
+
+def test_existing_case_is_addressed_like_the_real_cli(autopsy_context: ExecutionContext, registry, monkeypatch) -> None:
+    fake = FakeAutopsy()
+    monkeypatch.setattr("lab_agent.integrations.autopsy.run_command", fake)
+    registry.execute("autopsy.create_case", {"case_name": "lab3"}, autopsy_context)
+    registry.execute("autopsy.add_data_source", {"data_source": "input/evidence.dd"}, autopsy_context)
+    registry.execute("autopsy.start_ingest", {}, autopsy_context)
+    registry.execute("autopsy.generate_report", {}, autopsy_context)
+    for command in fake.commands[1:]:
+        assert "--caseName=lab3" in command and not any(part.startswith("--caseDir") for part in command)
+        base = next(part.split("=", 1)[1] for part in command if part.startswith("--caseBaseDir="))
+        assert Path(base) == autopsy_context.workspace / "working" / "autopsy_cases"
+
+
+def test_fake_rejects_options_the_real_autopsy_does_not_know() -> None:
+    result = FakeAutopsy()(["autopsy64.exe", "--nosplash", "--caseDir=C:/case", "--runIngest"])
+    assert result.exit_code == REAL_CLI["unrecognized_exit_code"]
+    assert "Unrecognized option --caseDir" in result.stderr
+
+
+def test_ingest_of_an_existing_case_names_each_data_source(autopsy_context: ExecutionContext, registry, monkeypatch) -> None:
+    fake = FakeAutopsy()
+    monkeypatch.setattr("lab_agent.integrations.autopsy.run_command", fake)
+    registry.execute("autopsy.create_case", {"case_name": "lab3"}, autopsy_context)
+    registry.execute("autopsy.add_data_source", {"data_source": "input/evidence.dd"}, autopsy_context)
+    started = registry.execute("autopsy.start_ingest", {}, autopsy_context)
+    assert _verify(started, autopsy_context), started.details
+    assert "--dataSourceObjectId=1" in fake.commands[-1]
+    again = registry.execute("autopsy.start_ingest", {}, autopsy_context)  # nothing left to ingest: no new command
+    assert again.verified and again.details["already_ingested"] and len(fake.commands) == 3

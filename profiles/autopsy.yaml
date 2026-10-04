@@ -46,8 +46,10 @@ verification:
 notes:
   command_line_ingest:
     - "--createCase --caseName=<name> --caseBaseDir=<dir>"
-    - "--caseDir=<case> --addDataSource --dataSourcePath=<image>"
-    - "--caseDir=<case> --runIngest [--ingestProfile=<profile>]"
-    - "--caseDir=<case> --generateReports"
+    # An existing case is opened by its parent folder and name; --caseDir is rejected
+    # ("Unrecognized option", verified on Autopsy 4.23.1).
+    - "--caseBaseDir=<case parent> --caseName=<name> --addDataSource --dataSourcePath=<image>"
+    - "--caseBaseDir=<case parent> --caseName=<name> --runIngest --dataSourceObjectId=<id> [--ingestProfile=<profile>]"
+    - "--caseBaseDir=<case parent> --caseName=<name> --generateReports"
   verification: "Results are verified by reading autopsy.db (data_source_info, ingest_jobs, tsk_files, blackboard_artifacts)."
   source: "Autopsy user documentation: Command Line Ingest."
