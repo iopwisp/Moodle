@@ -7,7 +7,7 @@
   → Analyzer (PDF/DOCX/TXT/MD/CSV/JSON/ZIP, роли файлов, шаги, вопросы, deliverables)
   → Planner (AI или детерминированный, только capabilities из реестра, валидация плана)
   → Runner (DAG зависимостей, policy, human-in-the-loop, pause/stop/resume)
-  → Integrations (forensics, autopsy, wireshark, burp, browser, packet_tracer, overleaf, powershell, desktop, ...)
+  → Integrations (forensics, autopsy, console, wireshark, burp, browser, packet_tracer, overleaf, powershell, desktop, ...)
   → Verification (независимые проверки post-condition)
   → Evidence (только реальные файлы + SHA-256 + manifest)
   → DOCX + PDF отчёт и web-панель
@@ -67,10 +67,61 @@ lab-agent serve                                                          # http:
 Packet Tracer, desktop), агент перечисляет перед запуском и объявляет перед каждым: в это время не трогайте мышь и
 клавиатуру.
 
-AI-провайдер: `OPENAI_API_KEY` (OpenAI Responses API со strict JSON schema) или `OLLAMA_HOST` (Ollama).
+AI-провайдер: `OPENAI_API_KEY` (OpenAI Responses API со strict JSON schema), `OLLAMA_HOST` (Ollama) или
+`--ai-provider codex` — Codex CLI (`codex exec --output-schema`) на подписке ChatGPT, под которой вошёл Codex, без
+API-ключа. Codex ищется в `PATH`, затем внутри приложения Codex; путь можно задать `LAB_AGENT_CODEX_PATH`. `auto` его не
+выбирает: каждый вызов тратит лимит подписки.
 Без них работает детерминированный планировщик: он использует шаблоны процессов, которые
 публикуют интеграции, и сопоставляет требования по ключевым словам. Выдуманных capabilities,
 shell-команд, координат мыши и сетевых целей нет: план проверяется до выполнения.
+
+## Отчёт из Markdown (работа вручную)
+
+Если задание делалось руками, а не через `run`, отчёт собирается из одного Markdown-файла тем же оформлением, что и у
+агента (титульник, нумерация рисунков и таблиц, DOCX + PDF):
+
+```markdown
+---
+title: Анализ и восстановление разделов MBR и GPT
+number: 4
+course: Introduction to Digital Forensics
+output: "{surname}_week4.docx"     # {student} {surname} {group} {student_id} {title}
+---
+# 1. Цель работы
+Обычный текст, **жирный**, *курсив*, `код`.
+
+![Окно TestDisk после анализа](screenshots/testdisk.png)
+
+Таблица: Контрольные суммы образов
+![](report_data/hashes.csv)
+```
+
+```powershell
+lab-agent build-report .\workspace\Assignment4\report.md          # DOCX + PDF рядом с .md
+lab-agent build-report report.md --strict                           # не собирать, если проверка стиля нашла проблемы
+lab-agent lint-report  .\Surname_week2.docx                         # проверить готовый отчёт
+```
+
+ФИО, группа и ID берутся из `report` в config.yaml (их можно переопределить в шапке; `surname:` — если фамилия в
+`student_name` стоит не первой). Отсутствующая или битая картинка — ошибка, а не заглушка. `lint-report` ищет шаблонные
+фразы, из-за которых текст выглядит сгенерированным («в данной лабораторной работе», «успешно», «таким образом»,
+«In conclusion»…), одинаковые начала абзацев, отчёт из одних списков и забытые `TODO` / `[вставить скриншот]`.
+
+## Консольные программы (TestDisk, PhotoRec)
+
+Интеграция `console` запускает текстовую программу в отдельном окне conhost и управляет ею без фокуса: клавиши
+пишутся прямо в буфер консоли, экран читается как текст, скриншот снимается с самого окна. Мышь и клавиатуру можно не
+отпускать. Каждый шаг сохраняет экран в `results/` и может ждать ожидаемый текст (`wait_for`) — так шаг и проверяется.
+
+```yaml
+- console.start:  {program: testdisk, args: ["/log", "case04_work/mbr_working.img"], wait_for: "TestDisk 7"}
+- console.keys:   {keys: "{ENTER}", wait_for: "partition table type"}   # {UP} {DOWN} {ESC} {TAB} {F1}..
+- console.screenshot: {name: testdisk_types.png}
+- console.close:  {}
+```
+
+Дисковые утилиты получают только файл образа из workspace (не физический диск); окно с `pwsh`/`cmd` — это произвольные
+команды, поэтому оно разрешено только при `policy.powershell.arbitrary: true`.
 
 ## Workspace
 
@@ -107,6 +158,7 @@ Start/Resume, Pause, Stop, Retry и Approve/Reject, а также ссылки �
 py -3.12 -m ruff check src tests
 py -3.12 -m mypy
 py -3.12 -m pytest -q -rs
+$env:LAB_AGENT_REAL_APPS = "1"; py -3.12 -m pytest -q -k real       # + настоящий TestDisk (и Codex при LAB_AGENT_REAL_CODEX=1)
 ```
 
 Используйте Burp, браузер и сетевые инструменты только на локальных, намеренно уязвимых
