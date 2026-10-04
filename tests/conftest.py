@@ -20,7 +20,7 @@ def deterministic_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Age
     """Every test runs with defaults: no config.yaml, no AI keys, no profile overrides."""
     for variable in ("OPENAI_API_KEY", "OLLAMA_HOST", "LAB_AGENT_CONFIG", "LAB_AGENT_AUTOPSY_PATH", "LAB_AGENT_BURP_PATH",
                      "LAB_AGENT_PACKET_TRACER_PATH", "LAB_AGENT_WIRESHARK_PATH", "LAB_AGENT_PROFILES_DIR",
-                     "LAB_AGENT_AUTHORIZED_TARGETS"):
+                     "LAB_AGENT_AUTHORIZED_TARGETS", "LAB_AGENT_TESTDISK_PATH", "LAB_AGENT_PHOTOREC_PATH"):
         monkeypatch.delenv(variable, raising=False)
     # Applications installed on the developer machine (Autopsy, Burp, ...) must not leak into tests:
     # discovery may only find what a test puts on PATH, in an env var or in its own install root.

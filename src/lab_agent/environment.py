@@ -64,6 +64,8 @@ def _roots() -> list[Path]:
     local = os.environ.get("LOCALAPPDATA")
     if local:
         roots.append(Path(local) / "Programs")
+    if os.name == "nt":  # portable tools (TestDisk, HxD, ...) are usually unpacked to C:\Tools
+        roots.append(Path(os.environ.get("SystemDrive", "C:") + "\\") / "Tools")
     roots.extend([Path("/usr/bin"), Path("/usr/local/bin"), Path("/opt"), Path("/Applications")])
     unique: list[Path] = []
     for root in roots:
