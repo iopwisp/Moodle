@@ -35,8 +35,8 @@ output: Assignment4_{student_id}_{surname}.docx
 def spec(tmp_path: Path, config) -> Path:  # type: ignore[no-untyped-def]
     from PIL import Image
 
-    config.report.student_name = "Konysbek Abu"
-    config.report.group = "cs-2426"
+    config.report.student_name = "Ivanov Ivan"
+    config.report.group = "cs-0000"
     (tmp_path / "shots").mkdir()
     Image.new("RGB", (800, 500), "navy").save(tmp_path / "shots" / "testdisk.png")
     (tmp_path / "data").mkdir()
@@ -48,7 +48,7 @@ def spec(tmp_path: Path, config) -> Path:  # type: ignore[no-untyped-def]
 
 def test_markdown_becomes_a_numbered_report(spec: Path) -> None:
     report, _ = build_spec_report(spec)
-    assert report.language == "ru" and report.meta["student"] == "Konysbek Abu" and report.meta["number"] == "4"
+    assert report.language == "ru" and report.meta["student"] == "Ivanov Ivan" and report.meta["number"] == "4"
     captions = [b.text for b in report.blocks if b.kind == "caption"]
     assert captions == ["Рисунок 1 — Окно TestDisk после анализа", "Таблица 1 — Контрольные суммы образов", "Таблица 2 — Итог"]
     tables = [b.rows for b in report.blocks if b.kind == "table"]
@@ -63,10 +63,10 @@ def test_docx_and_pdf_are_written_with_the_requested_name(spec: Path) -> None:
 
     result = build_report_files(spec)
     docx = Path(result["docx"])
-    assert docx.name == "Assignment4_StudentID_Konysbek.docx"
+    assert docx.name == "Assignment4_StudentID_Ivanov.docx"
     document = Document(str(docx))
     text = "\n".join(p.text for p in document.paragraphs)
-    assert "Konysbek Abu" in text and "Рисунок 1 — Окно TestDisk после анализа" in text
+    assert "Ivanov Ivan" in text and "Рисунок 1 — Окно TestDisk после анализа" in text
     assert len(document.inline_shapes) == 1 and len(document.tables) == 2
     assert len(PdfReader(result["pdf"]).pages) >= 2
     assert result["figures"] == 1 and result["tables"] == 2
@@ -103,12 +103,12 @@ def test_lint_is_quiet_on_plain_writing(spec: Path) -> None:
 def test_cli_build_report_and_strict_mode(spec: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # the CLI loads its own configuration: give it one instead of whatever config.yaml is in the current folder
     settings = spec.parent / "config.yaml"
-    settings.write_text("report:\n  student_name: Konysbek Abu\n", encoding="utf-8")
+    settings.write_text("report:\n  student_name: Ivanov Ivan\n", encoding="utf-8")
     cli = ["--config", str(settings)]
     assert main([*cli, "build-report", str(spec), "--no-pdf"]) == 0
-    assert (spec.parent / "Assignment4_StudentID_Konysbek.docx").is_file()
+    assert (spec.parent / "Assignment4_StudentID_Ivanov.docx").is_file()
     spec.write_text(SPEC + "\nTODO дописать вывод\n", encoding="utf-8")
     assert main([*cli, "build-report", str(spec), "--strict"]) == 4
     assert main([*cli, "lint-report", str(spec)]) == 4
-    assert main([*cli, "lint-report", str(spec.parent / "Assignment4_StudentID_Konysbek.docx")]) == 0
+    assert main([*cli, "lint-report", str(spec.parent / "Assignment4_StudentID_Ivanov.docx")]) == 0
     capsys.readouterr()
