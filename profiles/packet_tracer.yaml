@@ -47,13 +47,15 @@ versions:
     notes: "Packet Tracer 8.x (Qt). Device windows are top-level windows titled with the device name."
 
 notes: >
-  Canvas actions (placing devices, drawing cables) have no accessibility controls and are not declared here;
-  the agent asks the student to perform them (BLOCKED with instructions) and verifies the result through the CLI.
-  Selectors marked in this file must be confirmed with `lab-agent` desktop.observe on your Packet Tracer version.
+  The logical canvas has no accessibility controls; integrations/pt_canvas.py and pt_sim.py drive it with clicks and
+  keys posted to Packet Tracer's windows (no focus, no real mouse) and confirm every result through UI Automation:
+  device windows, port menus, the Simulation Panel Event List and the Workspace List. The IOS CLI tab still types
+  with the real keyboard. Selectors were recorded on Packet Tracer 8.2.2; confirm them on other versions.
 
 # Canvas automation (integrations/pt_canvas.py). Device-type panel buttons are found through UI Automation by these
 # names (class CDeviceButton); recorded from Packet Tracer 8.2.2 on 2026-10-05.
 canvas:
+  input: posted   # posted | mouse (RealPointer: real drag and clicks, needs the window in front)
   catalog:
     Network Devices:
       Routers: ["1841", "1941", "2620XM", "2621XM", "2901", "2911", "819HG-4G-IOX", "819HGW", "829", "CGR1240", "ISR4321",

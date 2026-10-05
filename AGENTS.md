@@ -23,6 +23,7 @@ py -3.12 -m pytest -q -rs                    # все тесты (реальны
 $env:LAB_AGENT_REAL_APPS="1"; py -3.12 -m pytest -q -k real    # + настоящий TestDisk
 py -3.12 -m lab_agent.cli build-report <report.md>           # отчёт DOCX+PDF из Markdown (формат — в README)
 py -3.12 -m lab_agent.cli lint-report <report.md|.docx>      # проверка на «ИИ-стиль» и забытые TODO
+py -3.12 -m lab_agent.cli do <workspace> <capability> -p key=value   # один шаг без плана, улики в workspace
 ```
 
 Перед коммитом — ruff, mypy и pytest должны быть чистыми. Коммитить и пушить только по просьбе пользователя.
@@ -87,10 +88,19 @@ Student ID оставлять пустым, если пользователь е
   Профиль: `profiles/packet_tracer.yaml`. Файлы `.pka/.pkt` зашифрованы — читать их как текст нельзя.
   В PT есть IPC API (`help/default/IpcAPI`, класс `Simulation`: `setSimulationMode`, `forward`,
   `getFrameInstanceAt`) — путь к автоматизации симуляции через Script Module или ExApp (PTMP, TCP 39000); не сделано.
-  **Холст автоматизирован** (`integrations/pt_canvas.py`): `add_device`, `rename_device`, `survey_canvas`,
-  `connect_devices`, `configure_pc dhcp`, `verify_connectivity` — проверено на реальном PT (см. README). `.pka`
-  открывается в режиме Guest без входа. Экран 2560x1440 при 150 %: координаты снимка брать из Win32 GetWindowRect,
-  не из UIA-прямоугольника окна (сдвиг на ~40 px).
+  **Холст и Simulation автоматизированы** (`integrations/pt_canvas.py`, `integrations/pt_sim.py`): `add_device`,
+  `rename_device`, `survey_canvas`, `connect_devices`, `configure_pc dhcp`, `verify_connectivity`, `list_topology`,
+  `delete_link`, `set_mode`, `set_event_filters`, `trace_traffic` (пути DNS/HTTP/ICMP из Event List), `traceroute`.
+  Клики и клавиши **посылаются окнам PT сообщениями** (`desktop/messages.py`, PostMessage) — фокус и мышь не нужны,
+  пользователю можно работать в другом окне. Исключения: IOS CLI роутеров/коммутаторов и Save As (клавиатура).
+  Устройство ставится щелчком по модели и щелчком по холсту (перетаскивание в PT — OLE, сообщениями не делается).
+  Линк удаляется через окно Workspace List (таблица Links + Remove Link). Фильтры событий реагируют только на клик
+  (не на Toggle/Space). Event List отдаёт колонки At Device/Type, только когда они на экране, — панель временно
+  расширяется. Свёрнутое окно PT UIA не видит — агент разворачивает его без активации. `.pka` открывается в режиме
+  Guest без входа; в Guest нельзя создать пустую топологию, а activity часто скрывают у роутеров вкладку CLI — поэтому
+  IOS CLI вживую ещё не проверен. Экран 2560x1440 при 150 %: координаты снимка брать из Win32 GetWindowRect.
+  Для отдельных шагов: `lab-agent do <ws> packet_tracer.open_project -p file=input/x.pka`, дальше другие `do` сами
+  находят окно этого проекта (путь в `working/packet_tracer/project.txt`).
 - **Burp Community 2026.8:** горячие клавиши работают только когда окно Burp в фокусе.
 
 ## AI-планировщик агента
@@ -107,6 +117,10 @@ Student ID оставлять пустым, если пользователь е
   прогноз DNS-пути, наблюдаемый HTTP-путь и путь после удаления линка (**каждый путь полностью**:
   `PC0 > Router1 > Switch2 > Server`), таблица tracert (строки 1–5; 6–7 уже даны) + сравнение с симуляцией,
   скриншоты окна Simulation для трёх вопросов об изменении пути. Теория — разделы 9.2.1 и 9.2.2.
+  Как делать: workspace `workspace/Week2/` → `do open_project` → `do list_topology` (для прогноза пути) →
+  `do trace_traffic -p source=<PC> -p url=<адрес из инструкции>` (пути + скриншот Event List) → `do delete_link` →
+  снова `trace_traffic` → `do traceroute`. Пути и хопы брать только из результатов, текст — в `report.md` →
+  `build-report`, затем `lint-report`. Оригинал `.pka` не трогать (работать с копией в `input/`).
 - Коммит `41cd3c6 asd` уже в `origin/main` — не переписывать. В git `user.email` стоит заглушка `твоя@почта.com`:
   коммиты не привязываются к GitHub-аккаунту — пусть пользователь поставит свой адрес.
 - В `workspace/` лежат старые неудачные прогоны `Assignment_3_20260930T11…` — удалять только с согласия пользователя.

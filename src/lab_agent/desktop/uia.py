@@ -296,12 +296,19 @@ class PywinautoDriver:
                 value = value.get("Value", "")
             if value:
                 parts.append(str(value))
-        try:
-            texts = control.texts()
-            parts.extend(str(t) for t in texts if t)
-        except Exception:  # noqa: BLE001, S110
-            pass
+        lines = self.read_lines(control)
+        if any(lines):
+            # one part, not one per line: a console repeats lines ("Trace complete.", ping statistics) and
+            # de-duplicating them would merge two runs of the same command into one
+            parts.append("\n".join(lines))
         return "\n".join(dict.fromkeys(parts))
+
+    def read_lines(self, control: Any) -> list[str]:
+        """Every text line of a control in order; for consoles this is complete, unlike the truncated UIA value."""
+        try:
+            return [str(t) for t in control.texts()]
+        except Exception:  # noqa: BLE001
+            return []
 
     def read_value(self, control: Any) -> str:
         try:

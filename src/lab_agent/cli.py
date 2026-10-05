@@ -112,6 +112,13 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--attach", type=Path, action="append", default=[],
                    help="File produced by hand (e.g. answers.md); copied to results/ and registered for this step. "
                         "Markdown is rendered into the report.")
+    p = sub.add_parser("do", help="Run one capability in a workspace and register its evidence (manual assignments)")
+    p.add_argument("workspace")
+    p.add_argument("capability", help="e.g. packet_tracer.trace_traffic (see `lab-agent capabilities`)")
+    p.add_argument("-p", "--param", action="append", default=[],
+                   help="key=value; the value may be JSON, e.g. -p protocols='[\"DNS\",\"HTTP\"]' -p max_steps=60")
+    p.add_argument("--json", dest="params_json", help="all parameters as one JSON object")
+    p.add_argument("--step", type=int, help="attach the evidence to this plan step")
     p = sub.add_parser("hash", help="Calculate MD5, SHA1, and SHA256 for a file")
     p.add_argument("file", type=Path)
     p = sub.add_parser("files", help="List files under a workspace-relative path")
@@ -181,6 +188,52 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--wsl", action="store_true")
     sub.add_parser("config", help="Print the effective configuration")
     return parser
+
+
+def _parameters(pairs: list[str], raw: str | None) -> dict[str, object]:
+    parameters: dict[str, object] = json.loads(raw) if raw else {}
+    if not isinstance(parameters, dict):
+        raise ValueError("--json must be a JSON object")  # noqa: TRY004 - reported like every other usage error
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            raise ValueError(f"--param needs key=value, got {pair!r}")
+        try:
+            parameters[key.strip()] = json.loads(value)
+        except json.JSONDecodeError:
+            parameters[key.strip()] = value  # plain text such as a device name or a URL
+    return parameters
+
+
+def _do(workspace: Path, capability: str, parameters: dict[str, object], step: int | None) -> dict[str, object]:
+    """One capability outside a plan: same adapters, verification of evidence files and evidence register as `run`."""
+    from .integrations.base import CapabilityBlocked, ExecutionContext
+
+    try:
+        assignment = load_state(workspace).assignment
+    except (OSError, ValueError):
+        assignment = workspace.name
+    registry = _registry()
+    problems = registry.validate_parameters(capability, parameters)
+    if problems:
+        raise ValueError(f"{capability}: {'; '.join(problems)}")
+    context = ExecutionContext(workspace, assignment, step_id=step, config=get_config(), screenshot_fn=take_screenshot)
+    try:
+        result = registry.execute(capability, parameters, context)
+    except CapabilityBlocked as exc:
+        return {"capability": capability, "verified": False, "blocked": True, "details": {"reason": str(exc)}, "evidence": []}
+    finally:
+        registry.shutdown()
+    registered, problems = [], []
+    for artifact in result.evidence:
+        try:
+            item = register_evidence(workspace, Path(str(artifact["path"])), str(artifact.get("description", capability)),
+                                     str(artifact.get("type", "file")), step, capability=capability)
+            registered.append(item.path)
+        except (OSError, ValueError) as exc:
+            problems.append(f"{Path(str(artifact.get('path', ''))).name}: {exc}")
+    return {"capability": capability, "verified": result.verified and not problems, "blocked": result.blocked,
+            "details": result.details, "evidence": registered, **({"evidence_errors": problems} if problems else {})}
 
 
 def _targets(args: argparse.Namespace) -> set[str]:
@@ -308,6 +361,10 @@ def main(argv: list[str] | None = None) -> int:
             with launch_log.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps({"executable": args.executable, "args": args.args, "pid": process.pid}, ensure_ascii=False) + "\n")
             print(json.dumps({"pid": process.pid, "executable": args.executable}, ensure_ascii=False))
+        elif command == "do":
+            outcome = _do(_workspace_arg(args.workspace), args.capability, _parameters(args.param, args.params_json), args.step)
+            _print(outcome)
+            return 0 if outcome["verified"] else 1
         elif command == "screenshot":
             workspace = _workspace_arg(args.workspace)
             path = take_screenshot(workspace, name=args.name, window_title_re=args.window)

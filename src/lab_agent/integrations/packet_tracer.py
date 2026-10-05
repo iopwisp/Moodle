@@ -19,8 +19,15 @@ What is automated, and how it is verified:
 * **Canvas** (``add_device``/``connect_devices``/``rename_device``/
   ``survey_canvas``): see :mod:`.pt_canvas` - panel buttons and port menus are
   found through UI Automation by name, devices on the canvas by clicking icon
-  blobs and reading the device window each one opens.  These steps move the
-  real mouse, so they are marked interactive.
+  blobs and reading the device window each one opens.  Clicks and keys are
+  posted to Packet Tracer's windows (:class:`~lab_agent.desktop.messages.
+  PostedPointer`), so the student may keep working; a model is placed by a
+  click on it and a click on the canvas.
+* **Simulation and topology** (``set_mode``/``set_event_filters``/
+  ``trace_traffic``/``list_topology``/``delete_link``/``traceroute``): see
+  :mod:`.pt_sim` - UI Automation plus window messages posted to Packet Tracer,
+  so they need neither focus nor the real mouse.  Paths are read from the
+  Event List, links from the Workspace List, hops from the real ``tracert``.
 """
 
 from __future__ import annotations
@@ -211,8 +218,11 @@ def parse_ping(text: str) -> dict[str, Any] | None:
 class PacketTracerAdapter(BaseIntegration):
     name = "packet_tracer"
     APPLICATIONS = (PT_SPEC,)
-    INTERACTIVE = frozenset({"packet_tracer.open_project", "packet_tracer.add_device", "packet_tracer.connect_devices",
-                             "packet_tracer.rename_device", "packet_tracer.survey_canvas", "packet_tracer.open_cli", "packet_tracer.enter_command", "packet_tracer.configure_router", "packet_tracer.configure_switch", "packet_tracer.configure_pc", "packet_tracer.verify_connectivity", "packet_tracer.save_project"})
+    # Canvas, Simulation, Workspace List and PC Command Prompt steps post window messages and need no focus; the IOS
+    # CLI tab (routers, switches - ping may start there), Save As and opening a file still use the keyboard / take focus.
+    INTERACTIVE = frozenset({"packet_tracer.open_project", "packet_tracer.open_cli", "packet_tracer.enter_command",
+                             "packet_tracer.configure_router", "packet_tracer.configure_switch",
+                             "packet_tracer.verify_connectivity", "packet_tracer.save_project"})
     CAPABILITIES = (
         Capability("packet_tracer.launch", "packet_tracer", "Start Packet Tracer and wait for the main window", (), ("screenshot",),
                    "main window visible (login walls are reported as BLOCKED)", requires=("app:packet_tracer",),
@@ -264,6 +274,36 @@ class PacketTracerAdapter(BaseIntegration):
                    (Param("source", "str", True), Param("target", "str", True, "IP address or host name"), Param("min_received", "int")),
                    ("command_output", "screenshot"), "received replies >= min_received (default 1)", requires=("app:packet_tracer",),
                    keywords=("ping", "пинг", "connectivity", "связност")),
+        Capability("packet_tracer.set_mode", "packet_tracer", "Switch Packet Tracer to Realtime or Simulation mode",
+                   (Param("mode", "str", True, "realtime | simulation"),), ("screenshot",), "the mode's own controls are shown",
+                   requires=("app:packet_tracer",), keywords=("simulation mode", "realtime mode", "режим симуляции")),
+        Capability("packet_tracer.set_event_filters", "packet_tracer", "Show only the named protocols in the Event List",
+                   (Param("protocols", "list", True, "e.g. [DNS, HTTP]"),), ("json",),
+                   "the 'Visible Events' label lists exactly these protocols", requires=("app:packet_tracer",),
+                   keywords=("edit filters", "event list filters", "фильтр")),
+        Capability("packet_tracer.trace_traffic", "packet_tracer",
+                   "Simulation mode: send a web request (or a Command Prompt command) and record each protocol's path",
+                   (Param("source", "str", True, "device that sends, e.g. PC0"),
+                    Param("url", "str", False, "web address opened in the source's browser (DNS + HTTP)"),
+                    Param("command", "str", False, "or a Command Prompt command, e.g. ping 192.168.1.10 (ICMP)"),
+                    Param("protocols", "list", False, "event filters and paths to report; default [DNS, HTTP] or [ICMP]"),
+                    Param("destinations", "dict", False, "protocol -> device where the request ends, e.g. {HTTP: Server}"),
+                    Param("max_steps", "int", False, "Capture / Forward limit (default 80)")),
+                   ("json", "screenshot"), "every protocol's request reached its end and the answer came back to the source",
+                   requires=("app:packet_tracer",),
+                   keywords=("packet flow", "capture/forward", "capture / forward", "event list", "simulation", "путь пакета")),
+        Capability("packet_tracer.list_topology", "packet_tracer", "Read every device and link from Packet Tracer's Workspace List",
+                   (), ("json",), "devices and links listed by Packet Tracer itself", requires=("app:packet_tracer",),
+                   keywords=("topology", "links", "workspace list")),
+        Capability("packet_tracer.delete_link", "packet_tracer", "Remove the link between two devices",
+                   (Param("a", "str", True, "device or device:port, e.g. Router1"), Param("b", "str", True, "e.g. Switch2")),
+                   ("json", "screenshot"), "the link is no longer in the Workspace List", requires=("app:packet_tracer",),
+                   keywords=("delete link", "remove link", "delete the link", "удалить линк", "удалите")),
+        Capability("packet_tracer.traceroute", "packet_tracer", "Run tracert from a PC's Command Prompt (Realtime mode) and parse the hops",
+                   (Param("source", "str", True, "PC that runs tracert"), Param("target", "str", True, "IP address or host name"),
+                    Param("timeout", "int", False, "seconds to wait for 'Trace complete' (default 120)")),
+                   ("command_output", "screenshot"), "'Trace complete' with every hop parsed", requires=("app:packet_tracer",),
+                   keywords=("tracert", "traceroute", "трассировк")),
         Capability("packet_tracer.capture_topology", "packet_tracer", "Screenshot of the Packet Tracer main window",
                    (Param("name", "str"),), ("screenshot",), "valid window screenshot", requires=("app:packet_tracer",)),
         Capability("packet_tracer.save_project", "packet_tracer", "Save the project (.pkt) to results/",
@@ -278,12 +318,17 @@ class PacketTracerAdapter(BaseIntegration):
         from ..applications import ManagedApplication
 
         app = ManagedApplication("packet_tracer", context, spec=PT_SPEC)
-        for project in reversed(list(self._launched)):  # the newest project window opened by this run wins
-            selector = self._project_window(project)
-            if app.driver.find_window(selector, timeout=0) is not None:
+        # the newest project window opened by this run wins; a separate `lab-agent do` call finds the workspace's project
+        for project in [*reversed(list(self._launched)), self._workspace_project(context)]:
+            selector = self._project_window(project) if project else None
+            if selector and app.driver.find_window(selector, timeout=0) is not None:
                 app.selector_override = selector
                 break
         return app
+
+    def _workspace_project(self, context: ExecutionContext) -> str:
+        marker = context.workspace / "working" / "packet_tracer" / "project.txt"
+        return marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
 
     @staticmethod
     def _project_window(project: str) -> dict[str, Any]:
@@ -348,6 +393,7 @@ class PacketTracerAdapter(BaseIntegration):
                 previous.close()
             app.launch([str(project)], reuse=False)
         self._launched[str(project)] = app
+        (self._folder(context) / "project.txt").write_text(str(project), encoding="utf-8")
         title = app.driver.window_title(app.window) if app.window is not None else ""
         picture = app.screenshot(f"packet_tracer_open_{context.stamp()}.png")
         ok = project.stem.casefold() in title.casefold()
@@ -417,13 +463,36 @@ class PacketTracerAdapter(BaseIntegration):
 
     def _run_cli(self, device: str, lines: list[str], context: ExecutionContext, tab: str = "CLI") -> tuple[str, list[str]]:
         app = self._app(context)
-        if app.running_window() is None:
+        window = app.running_window()
+        if window is None:
             raise CapabilityBlocked("Packet Tracer is not running; run packet_tracer.launch/open_project first.")
+        if tab == "Command Prompt" and (self.poster_factory is not None or getattr(window, "handle", None)):
+            return self._run_prompt(device, lines, context, app)
         self._open_from_canvas(app, device, context)
         _, console = self._console(app, device, tab)
         output = self._type_lines(app, console, ["", *lines], context)
         errors = [line for line in output.splitlines() if any(marker in line for marker in CLI_ERRORS)]
         return output, errors
+
+    def _run_prompt(self, device: str, lines: list[str], context: ExecutionContext, app: Any) -> tuple[str, list[str]]:
+        """PC Command Prompt through posted keys (no focus needed); each command's output once the prompt is back."""
+        from .pt_sim import SimulationError
+
+        sim, _ = self._sim(context)
+        outputs = []
+        try:
+            sim.set_mode("realtime")  # in Simulation mode DHCP and ping only advance when the simulation is stepped
+        except SimulationError as exc:
+            raise CapabilityBlocked(str(exc)) from exc
+        for line in [line for line in lines if line.strip()]:
+            slow = line.split()[0].casefold() in {"ping", "tracert", "ipconfig"}  # /renew waits for the DHCP server
+            timeout = float(app.profile.get("ping_timeout_seconds", 60)) if slow else 30.0
+            try:
+                outputs.append(f"{line}\n{sim.command(device, line, timeout=timeout, hints=self._hints(context, device))}")
+            except SimulationError as exc:
+                raise CapabilityBlocked(str(exc)) from exc
+        output = "\n".join(outputs)
+        return output, [row for row in output.splitlines() if any(marker in row for marker in CLI_ERRORS)]
 
     def open_cli(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         app = self._app(context)
@@ -498,26 +567,29 @@ class PacketTracerAdapter(BaseIntegration):
         kind = str(devices.get(source, {}).get("type", "pc")).lower()
         tab = "CLI" if kind in {"router", "switch", "l3switch"} else "Command Prompt"
         output, _ = self._run_cli(source, [f"ping {target}"], context, tab=tab)
-        _, console = self._console(app, source, tab)
-        # A PT ping takes 20-35 s in realtime mode: poll the console until this ping's statistics appear.
-        interval = float(app.profile.get("ping_poll_seconds", 2))
-        polls = max(1, int(float(app.profile.get("ping_timeout_seconds", 60)) / interval))
-        stats = None
-        full = ""
-        for _ in range(polls):
-            full = app.driver.read_text(console)
-            latest = full.rfind(f"ping {target}")
-            stats = parse_ping(full[latest:] if latest >= 0 else full[-4000:])
-            if stats is not None:
-                break
-            context.sleep(interval)
-        stats = stats or parse_ping(output)
+        stats = parse_ping(output)  # the Command Prompt path returns once the ping has finished
+        full = output
+        if stats is None:
+            _, console = self._console(app, source, tab)
+            # A PT ping takes 20-35 s in realtime mode: poll the console until this ping's statistics appear.
+            interval = float(app.profile.get("ping_poll_seconds", 2))
+            polls = max(1, int(float(app.profile.get("ping_timeout_seconds", 60)) / interval))
+            for _ in range(polls):
+                full = app.driver.read_text(console)
+                latest = full.rfind(f"ping {target}")
+                stats = parse_ping(full[latest:] if latest >= 0 else full[-4000:])
+                if stats is not None:
+                    break
+                context.sleep(interval)
         path = context.save_result(f"pt_ping_{source}_{target.replace('.', '_')}.txt", full[-4000:])
         items = [evidence(path, f"ping {target} from {source}", "command_output")]
-        try:
-            items.append(evidence(app.screenshot(f"pt_ping_{source}_{context.stamp()}.png"), f"Ping from {source}", "screenshot"))
-        except Exception:  # noqa: BLE001, S110 - screenshot optional here; text is the proof
-            pass
+        name = f"pt_ping_{source}_{context.stamp()}.png"
+        for capture in (lambda: context.screenshot(name, window_title_re=f"^{re.escape(source)}$"), lambda: app.screenshot(name)):
+            try:  # the device window shows the ping itself; the main window is the fallback
+                items.append(evidence(capture(), f"Ping from {source}", "screenshot"))
+                break
+            except Exception:  # noqa: BLE001, S112 - screenshot optional here; text is the proof
+                continue
         ok = stats is not None and stats["received"] >= minimum
         reason = {} if ok else {"reason": f"ping statistics {stats or 'not found'} (need {minimum} replies)"}
         return IntegrationResult(ok, {"source": source, "target": target, "stats": stats, **reason}, items,
@@ -536,10 +608,12 @@ class PacketTracerAdapter(BaseIntegration):
         if self.pointer_factory is None:
             if not getattr(window, "handle", None):
                 raise CapabilityBlocked("Canvas automation needs a real Packet Tracer window on Windows.")
+            from ..desktop.messages import PostedPointer
             from ..desktop.pointer import RealPointer
 
-            try:
-                pointer = RealPointer()
+            try:  # posted messages leave the student's mouse and keyboard alone; profile canvas.input: mouse switches back
+                mouse = str(app.profile.get("canvas", {}).get("input", "posted")).casefold() == "mouse"
+                pointer = RealPointer() if mouse else PostedPointer(app.driver)
             except RuntimeError as exc:
                 raise CapabilityBlocked(str(exc)) from exc
         else:
@@ -607,6 +681,189 @@ class PacketTracerAdapter(BaseIntegration):
             return {"devices": devices}
 
         return self._canvas_step(context, work, "survey")
+
+    # ------------------------------------------------------------------ simulation and topology
+    poster_factory: Any = None  # tests inject a fake; default: lab_agent.desktop.messages.MessagePoster
+
+    def _sim(self, context: ExecutionContext) -> tuple[Any, Any]:
+        from .pt_sim import PTSimulation
+
+        if self.poster_factory is None:
+            from ..desktop.messages import MessagePoster, restore_minimized
+
+            # a minimized window hides every control from UI Automation; leave the student's own Packet Tracer alone
+            project = next(reversed(list(self._launched)), "") or self._workspace_project(context)
+            restore_minimized(project or "Cisco Packet Tracer")
+        app = self._app(context)
+        window = app.running_window()
+        if window is None:
+            raise CapabilityBlocked("Packet Tracer is not open; run packet_tracer.open_project first.")
+        if self.poster_factory is None:
+            if not getattr(window, "handle", None):
+                raise CapabilityBlocked("Simulation automation needs a real Packet Tracer window on Windows.")
+            poster = MessagePoster()
+        else:
+            poster = self.poster_factory()
+        return PTSimulation(app.driver, window, poster, sleep=context.sleep), app
+
+    def _sim_step(self, context: ExecutionContext, label: str, work: Any) -> IntegrationResult:
+        """Run ``work(sim, app)``; Packet Tracer refusals become a failed step with a screenshot of the window."""
+        from .pt_sim import SimulationError
+
+        sim, app = self._sim(context)
+        try:
+            return work(sim, app)  # type: ignore[no-any-return]
+        except (SimulationError, ValueError) as exc:
+            picture = app.screenshot(f"pt_{label}_failed_{context.stamp()}.png")
+            return IntegrationResult(False, {"reason": str(exc)}, [evidence(picture, f"Packet Tracer when {label} failed", "screenshot")])
+
+    @staticmethod
+    def _suffix(context: ExecutionContext) -> str:
+        """Plan steps number their files; separate `lab-agent do` calls must not overwrite each other's."""
+        return f"{context.step_id:02d}" if context.step_id else context.stamp()
+
+    @staticmethod
+    def _hints(context: ExecutionContext, device: str) -> list[tuple[int, int]]:
+        from .pt_canvas import CanvasState
+
+        point = CanvasState.load(context.folder("working") / "pt_canvas.json").devices.get(device)
+        return [(int(point[0]), int(point[1]))] if point else []
+
+    def set_mode(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        def work(sim: Any, app: Any) -> IntegrationResult:
+            mode = sim.set_mode(param_str(parameters, "mode"))
+            picture = app.screenshot(f"pt_mode_{mode}_{context.stamp()}.png")
+            return IntegrationResult(True, {"mode": mode}, [evidence(picture, f"Packet Tracer in {mode} mode", "screenshot")],
+                                     checks=[{"type": "image_valid", "path": f"screenshots/{picture.name}"}])
+
+        return self._sim_step(context, "set_mode", work)
+
+    def set_event_filters(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        protocols = [str(p) for p in param_list(parameters, "protocols")]
+
+        def work(sim: Any, app: Any) -> IntegrationResult:
+            sim.set_mode("simulation")
+            shown = sim.set_filters(protocols)
+            record = context.save_result(f"pt_event_filters_{self._suffix(context)}.json", {"visible_events": shown})
+            return IntegrationResult(True, {"visible_events": shown}, [evidence(record, "Event List filters", "json")])
+
+        return self._sim_step(context, "set_event_filters", work)
+
+    def trace_traffic(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        from .pt_sim import events_as_rows, path_text, trace_path
+
+        source = param_str(parameters, "source")
+        url, command = param_str(parameters, "url"), param_str(parameters, "command")
+        if bool(url) == bool(command):
+            raise ValueError("Give either url (web request from the source's browser) or command (Command Prompt), not both.")
+        protocols = [str(p).upper() for p in param_list(parameters, "protocols")]
+        if not protocols:
+            protocols = ["DNS", "HTTP"] if url else (["ICMP"] if command.split()[:1] in (["ping"], ["tracert"]) else [])
+        if not protocols:
+            raise ValueError("protocols are required for this command, e.g. [ICMP]")
+        destinations = {str(k).upper(): str(v) for k, v in param_dict(parameters, "destinations").items()}
+        limit = param_int(parameters, "max_steps", 80)
+        hints = self._hints(context, source)
+
+        def work(sim: Any, app: Any) -> IntegrationResult:
+            sim.set_mode("simulation")
+            shown = sim.set_filters(protocols)
+            sim.reset()
+            if url:
+                sim.browse(source, url, hints)
+            else:
+                sim.command(source, command, wait=False, hints=hints)
+            last = protocols[-1]
+            with sim.wide_panel():
+                events, steps, stopped = sim.run(
+                    lambda found: trace_path(found, source, last, destinations.get(last, ""))["complete"], max_steps=limit)
+                picture = app.screenshot(f"pt_simulation_{source}_{context.stamp()}.png")
+            paths = {p: trace_path(events, source, p, destinations.get(p, "")) for p in protocols}
+            name = f"pt_events_{self._suffix(context)}"
+            rows = events_as_rows(events)
+            table = context.save_result(f"{name}.csv", "time,last_device,at_device,type\n"
+                                        + "".join(f"{r['time']},{r['last']},{r['at']},{r['type']}\n" for r in rows))
+            record = context.save_result(f"{name}.json", {"source": source, "url": url, "command": command,
+                                                          "visible_events": shown, "steps": steps, "stopped": stopped,
+                                                          "paths": paths, "events": rows})
+            missing = [p for p, path in paths.items() if not path["complete"]]
+            details = {"source": source, "visible_events": shown, "steps": steps, "stopped": stopped, "events": len(events),
+                       "paths": {p: path_text(path["request"]) for p, path in paths.items()},
+                       "replies": {p: path_text(path["reply"]) for p, path in paths.items()},
+                       "complete": {p: path["complete"] for p, path in paths.items()}}
+            if missing:
+                details["reason"] = (f"no complete {', '.join(missing)} exchange in the Event List after {steps} steps ({stopped})")
+            lines = [f"{p}: {path_text(path['request']) or 'no events'}"
+                     + (f"; reply {path_text(path['reply'])}" if path["reply"] else "") for p, path in paths.items()]
+            return IntegrationResult(not missing, details,
+                                     [evidence(picture, f"Simulation Panel: Event List for {url or command} from {source}", "screenshot"),
+                                      evidence(record, "Event List and paths", "json"), evidence(table, "Event List", "file")],
+                                     checks=[{"type": "image_valid", "path": f"screenshots/{picture.name}"}],
+                                     report_sections=[{"title": f"Packet flow from {source} (Simulation mode)", "paragraphs": lines}])
+
+        return self._sim_step(context, "trace_traffic", work)
+
+    def list_topology(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        def work(sim: Any, app: Any) -> IntegrationResult:
+            try:
+                topology = sim.topology()
+            finally:
+                sim.close_workspace_list()
+            record = context.save_result(f"pt_topology_live_{self._suffix(context)}.json", topology)
+            links = [f"{l['a']}{':' + l['a_port'] if l['a_port'] else ''} - {l['b']}{':' + l['b_port'] if l['b_port'] else ''}"
+                     for l in topology["links"]]
+            ok = bool(topology["devices"])
+            return IntegrationResult(ok, {"devices": [d["name"] for d in topology["devices"]], "links": links,
+                                          **({} if ok else {"reason": "the Workspace List shows no devices"})},
+                                     [evidence(record, "Devices and links from the Workspace List", "json")])
+
+        return self._sim_step(context, "list_topology", work)
+
+    def delete_link(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        first, second = param_str(parameters, "a"), param_str(parameters, "b")
+
+        def work(sim: Any, app: Any) -> IntegrationResult:
+            try:
+                result = sim.remove_link(first, second)
+            finally:
+                sim.close_workspace_list()
+            record = context.save_result(f"pt_delete_link_{self._suffix(context)}.json", result)
+            picture = app.screenshot(f"pt_link_deleted_{context.stamp()}.png")
+            removed = result["removed"]
+            return IntegrationResult(True, {**result, "link": f"{removed['a']} - {removed['b']}"},
+                                     [evidence(picture, f"Topology after deleting {removed['a']} - {removed['b']}", "screenshot"),
+                                      evidence(record, "Workspace List before/after", "json")],
+                                     checks=[{"type": "image_valid", "path": f"screenshots/{picture.name}"}])
+
+        return self._sim_step(context, "delete_link", work)
+
+    def traceroute(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        source, target = param_str(parameters, "source"), param_str(parameters, "target")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", target):
+            raise ValueError(f"target must be an IP address or host name, not {target!r}")
+        timeout = param_int(parameters, "timeout", 120)
+
+        def work(sim: Any, app: Any) -> IntegrationResult:
+            sim.set_mode("realtime")  # in Simulation mode tracert only advances when the simulation is stepped
+            trace = sim.traceroute(source, target, timeout=timeout, hints=self._hints(context, source))
+            stem = f"pt_tracert_{source}_{target}_{self._suffix(context)}".replace(".", "_").replace(" ", "_")
+            output = context.save_result(f"{stem}.txt", f"C:\\>tracert {target}\n{trace['output']}\n")
+            table = context.save_result(f"{stem}.csv", "hop,time1,time2,time3,address\n" + "".join(
+                f"{h['hop']},{','.join((h['times'] + ['', '', ''])[:3])},{h['address'] or 'Request timed out.'}\n" for h in trace["hops"]))
+            items = [evidence(output, f"tracert {target} from {source}", "command_output"), evidence(table, "tracert hops", "file")]
+            try:
+                picture = context.screenshot(f"pt_tracert_{source}_{context.stamp()}.png", window_title_re=f"^{re.escape(source)}$")
+                items.insert(0, evidence(picture, f"{source} Command Prompt: tracert {target}", "screenshot"))
+            except Exception:  # noqa: BLE001, S110 - the text output is the proof; the picture is a bonus
+                pass
+            ok = trace["complete"] and bool(trace["hops"])
+            hops = [f"{h['hop']}: {h['address'] or 'timed out'}" for h in trace["hops"]]
+            return IntegrationResult(ok, {"source": source, "target": target, "resolved": trace["target"], "hops": hops,
+                                          "complete": trace["complete"],
+                                          **({} if ok else {"reason": "tracert did not finish with 'Trace complete'"})},
+                                     items, checks=[{"type": "text_contains", "path": f"results/{output.name}", "value": "Trace complete"}])
+
+        return self._sim_step(context, "traceroute", work)
 
     def capture_topology(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         app = self._app(context)

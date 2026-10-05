@@ -64,8 +64,8 @@ lab-agent serve                                                          # http:
 ПО, ход работы обычным текстом на языке задания, ответы, вывод, приложения), и `reports/<Задание>_Audit.docx/.pdf` —
 технический журнал (проверки, хеши, ошибки). Скриншоты окон снимаются через `PrintWindow`: окно попадает на снимок,
 даже если его что-то перекрывает, а чужие окна — никогда. Шаги, которые нажимают клавиши в окнах программ (Burp,
-Packet Tracer, desktop), агент перечисляет перед запуском и объявляет перед каждым: в это время не трогайте мышь и
-клавиатуру.
+IOS CLI в Packet Tracer, desktop), агент перечисляет перед запуском и объявляет перед каждым: в это время не трогайте
+мышь и клавиатуру.
 
 AI-провайдер: `OPENAI_API_KEY` (OpenAI Responses API со strict JSON schema), `OLLAMA_HOST` (Ollama) или
 `--ai-provider codex` — Codex CLI (`codex exec --output-schema`) на подписке ChatGPT, под которой вошёл Codex, без
@@ -128,13 +128,21 @@ lab-agent lint-report  .\Surname_week2.docx                         # прове
 Холст Packet Tracer недоступен для UI Automation, но всё вокруг него доступно: кнопки панели устройств и кабелей
 (по именам `PC-PT`, `Copper Straight-Through`…), меню свободных портов и окна устройств. Поэтому агент:
 
-- ставит устройство, перетаскивая его модель с панели на свободное место холста (`add_device`), и даёт ему имя
-  через Config → Display Name (`rename_device`); можно писать обычные названия: PC, Laptop, Cable Modem, 2911, 2960;
+- ставит устройство: щелчок по модели на панели, затем щелчок по свободному месту холста (`add_device`), и даёт ему
+  имя через Config → Display Name (`rename_device`); можно писать обычные названия: PC, Laptop, Cable Modem, 2911, 2960;
 - находит устройства на холсте **обходом** (`survey_canvas`): ищет иконки на снимке окна, кликает каждую и читает
   заголовок открывшегося окна. Каждая координата подтверждена реальным окном устройства, без OCR и угадывания;
 - прокладывает кабель (`connect_devices`), выбирая порты по имени в меню Packet Tracer; если порт занят, шаг падает
   со списком свободных портов;
-- настраивает PC (`configure_pc` со `dhcp: true` или статикой) и проверяет `ping` по IP или имени (`cisco.srv`).
+- настраивает PC (`configure_pc` со `dhcp: true` или статикой) и проверяет `ping` по IP или имени (`cisco.srv`);
+- читает топологию из окна Workspace List (`list_topology`: устройства, линки, порты, статус) и удаляет линк через него
+  же (`delete_link {a: Router1, b: Switch2}`, порт можно указать сокращённо: `Router1:Gig0/1`);
+- режим Simulation: `set_mode`, `set_event_filters {protocols: [DNS, HTTP]}` (проверка — подпись Visible Events) и
+  `trace_traffic` — запрос из браузера PC (`url`) или команда Command Prompt (`command: ping …`), шаги Capture/Forward,
+  чтение Event List и путь каждого протокола полностью: `PC0 > Router1 > Switch2 > Server` и обратный путь. Скриншот
+  окна с развёрнутой панелью Event List, все события в `results/pt_events_*.csv/json`. Если ответ не вернулся, шаг
+  падает и показывает, докуда пакет дошёл;
+- `traceroute {source: PC0, target: 192.168.1.10}` — настоящий `tracert` в Realtime, таблица хопов в CSV.
 
 ```yaml
 - packet_tracer.open_project:    {file: input/Create_a_Simple_Network_pka.pka}   # .pka открывается в режиме Guest
@@ -144,12 +152,27 @@ lab-agent lint-report  .\Surname_week2.docx                         # прове
 - packet_tracer.connect_devices: {a: "Cable Modem:Port 0", b: "Internet:Coaxial7", cable: coaxial}
 - packet_tracer.configure_pc:    {device: PC, dhcp: true}
 - packet_tracer.verify_connectivity: {source: PC, target: cisco.srv, min_received: 3}
+- packet_tracer.trace_traffic:   {source: PC, url: cisco.srv}                  # пути DNS и HTTP
+- packet_tracer.delete_link:     {a: Internet, b: cisco.srv}
+- packet_tracer.traceroute:      {source: PC, target: cisco.srv}
 ```
 
-Эти шаги двигают настоящую мышь: перед ними агент предупреждает, а ввод отправляется, только если окно Packet Tracer
-на переднем плане (иначе шаг BLOCKED). Детерминированный планировщик сам такие шаги из текста лабы не составляет —
-их планирует AI-провайдер (`--ai-provider codex`) или пишет человек. Не автоматизировано: замена модулей на вкладке
-Physical и подключение к Wi-Fi через PC Wireless.
+Клики и клавиши **посылаются окнам Packet Tracer сообщениями** (`PostMessage`), а не настоящей мышью: окно не нужно
+выводить вперёд, а пользователь в это время может работать в другой программе. Так сделаны холст, Simulation,
+Workspace List и Command Prompt PC. Мышь и клавиатура по-прежнему нужны для IOS CLI (роутеры, коммутаторы) и Save As — эти шаги агент
+объявляет заранее. Вернуть настоящую мышь для холста: `canvas: {input: mouse}` в профиле. Детерминированный
+планировщик сам такие шаги из текста лабы не составляет — их планирует AI-провайдер (`--ai-provider codex`) или пишет
+человек. Не автоматизировано: замена модулей на вкладке Physical и подключение к Wi-Fi через PC Wireless.
+
+Отдельный шаг без плана — `lab-agent do`: тот же адаптер, те же проверки, улики регистрируются в workspace. Удобно для
+ручных заданий (схема `report.md`):
+
+```powershell
+lab-agent do .\workspace\Week2 packet_tracer.open_project -p file=input/9.2.4-identify-packet-flow.pka
+lab-agent do .\workspace\Week2 packet_tracer.list_topology
+lab-agent do .\workspace\Week2 packet_tracer.trace_traffic -p source=PC0 -p url=www.example.pka
+lab-agent do .\workspace\Week2 packet_tracer.traceroute -p source=PC0 -p target=192.168.1.10
+```
 
 ## Workspace
 
