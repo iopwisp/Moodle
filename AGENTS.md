@@ -57,6 +57,12 @@ Student ID оставлять пустым, если пользователь е
   Папку `Desktop\Assignment3` (собственная попытка пользователя) не трогать.
 - **Assignment 4 (MBR/GPT, TestDisk)** — вручную в `workspace/Assignment4`, отчёт
   `scripts/make_report.py --pdf` там же.
+- **Assignment 5 (NTFS/FAT32, Autopsy + PhotoRec Carver, журнал USN)** — вручную в `workspace/Assignment5`
+  (2026-10-05): комплект в `lab/` (Evidence, Case, Recovered, Screenshots), отчёт — заполненный шаблон
+  преподавателя `Report_Template_RU.docx` скриптом `scripts/fill_report.py`, PDF — `scripts/to_pdf.ps1` (Word, PDF/A,
+  чтобы шрифты встроились). GUI Autopsy — `scripts/gui.py` (настоящая мышь), PowerShell — `scripts/td.py`.
+  CSV с запятыми Excel при русской локали (разделитель «;») открывает одним столбцом — импорт через QueryTable
+  (`scripts/excel_journal.ps1`). В Autopsy время в UTC включается в Tools > Options > View (глобальная настройка).
 - **Burp/PortSwigger** — агент запускает Burp и прокси, сами лабы решаются вручную, в отчёт прикладывается
   баннер "Solved": `lab-agent complete-step <ws> <шаг> --verification "..." --attach solved.png`.
 
