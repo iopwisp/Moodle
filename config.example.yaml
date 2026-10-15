@@ -50,6 +50,15 @@ policy:
     authorized_targets: []  # e.g. [dvwa.lab.local, "*.lab.local", www.overleaf.com]
   require_confirmation_for_risk: [unsafe]
 
+kali:                       # optional defaults for local VirtualBox + SSH labs (docs/kali.md)
+  vm: ""                    # registered VM name or UUID
+  host: 127.0.0.1
+  port: 2222
+  user: kali
+  identity_file: ""         # private key path on Windows, never key contents/password
+  display: ":0"
+  xauthority: ""            # default: guest user's ~/.Xauthority
+
 plugins:
   entry_points: true        # load packages registered under doneasik_lab_agent.integrations
   directories: []           # folders with *.py plugins defining create_adapters(services)

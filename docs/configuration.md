@@ -19,6 +19,7 @@ Start from [`config.example.yaml`](../config.example.yaml); `lab-agent config` p
 | `browser.headless`, `browser.timeout_seconds` | Playwright session |
 | `browser.allow_external_subresources` | allow passive GET sub-resources from other hosts; navigations, redirects and non-GET requests stay in scope |
 | `report.*` | cover page (student, group, student ID, case ID, course, instructor), `language: en|ru` |
+| `kali.*` | VirtualBox VM name/UUID, SSH host/port/user, private key path, guest DISPLAY/XAUTHORITY; defaults for `kali` capabilities, see [kali.md](kali.md) |
 | `policy.tools.<tool>` | `allowed`, `require_confirmation` |
 | `policy.powershell.arbitrary` | enables `powershell.run_script` (still needs approval per step) |
 | `policy.network` | `localhost`, `authorized_targets_only`, `authorized_targets` (`host` or `*.domain`) |
@@ -35,6 +36,7 @@ Start from [`config.example.yaml`](../config.example.yaml); `lab-agent config` p
 | `LAB_AGENT_WORKSPACE_ROOT`, `LAB_AGENT_AI_PROVIDER`, `LAB_AGENT_AI_MODEL`, `LAB_AGENT_AI_TIMEOUT`, `LAB_AGENT_MAX_ATTEMPTS`, `LAB_AGENT_SCREENSHOT_MODE`, `LAB_AGENT_BROWSER_HEADLESS`, `LAB_AGENT_LOG_LEVEL`, `LAB_AGENT_JSON_LOGS` | override the matching setting |
 | `LAB_AGENT_STUDENT_NAME`, `LAB_AGENT_STUDENT_GROUP`, `LAB_AGENT_STUDENT_ID`, `LAB_AGENT_CASE_ID` | report cover page |
 | `LAB_AGENT_AUTHORIZED_TARGETS` | comma-separated hosts added to `policy.network.authorized_targets` |
+| `LAB_AGENT_KALI_VM`, `LAB_AGENT_KALI_HOST`, `LAB_AGENT_KALI_PORT`, `LAB_AGENT_KALI_USER`, `LAB_AGENT_KALI_SSH_KEY` | Kali VM connection defaults; network authorization still applies |
 | `LAB_AGENT_AUTOPSY_PATH`, `LAB_AGENT_BURP_PATH`, `LAB_AGENT_PACKET_TRACER_PATH`, `LAB_AGENT_WIRESHARK_PATH`, `LAB_AGENT_TSHARK_PATH`, `LAB_AGENT_FTK_PATH`, `LAB_AGENT_FOREMOST_PATH`, `LAB_AGENT_SCALPEL_PATH`, `LAB_AGENT_TSK_PATH`, `LAB_AGENT_TESTDISK_PATH`, `LAB_AGENT_PHOTOREC_PATH` | application executables (portable tools unpacked under `C:\Tools` are found automatically) |
 | `LAB_AGENT_WSL_DISTRO` | WSL distribution used for Linux forensic tools (default `Ubuntu`) |
 | `LAB_AGENT_AUTOPSY_TIMEOUT` | seconds allowed for Autopsy command-line ingest (default 21600) |

@@ -100,6 +100,20 @@ class ReportConfig(BaseModel):
     language: Literal["auto", "en", "ru"] = "auto"  # auto: the language of the assignment text
 
 
+class KaliConfig(BaseModel):
+    """Connection defaults for the user's local lab VM; never contains a password."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    vm: str = ""
+    host: str = "127.0.0.1"
+    port: int = Field(default=22, ge=1, le=65535)
+    user: str = "kali"
+    identity_file: str = ""
+    display: str = ":0"
+    xauthority: str = ""
+
+
 class PluginConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -125,6 +139,7 @@ class AgentConfig(BaseModel):
     screenshots: ScreenshotConfig = Field(default_factory=ScreenshotConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
+    kali: KaliConfig = Field(default_factory=KaliConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     plugins: PluginConfig = Field(default_factory=PluginConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -151,6 +166,11 @@ _ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
     "LAB_AGENT_STUDENT_NAME": ("report", "student_name"),
     "LAB_AGENT_STUDENT_GROUP": ("report", "group"),
     "LAB_AGENT_STUDENT_ID": ("report", "student_id"),
+    "LAB_AGENT_KALI_VM": ("kali", "vm"),
+    "LAB_AGENT_KALI_HOST": ("kali", "host"),
+    "LAB_AGENT_KALI_PORT": ("kali", "port"),
+    "LAB_AGENT_KALI_USER": ("kali", "user"),
+    "LAB_AGENT_KALI_SSH_KEY": ("kali", "identity_file"),
     "LAB_AGENT_CASE_ID": ("report", "case_id"),
 }
 
