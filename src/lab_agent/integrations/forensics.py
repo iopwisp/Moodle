@@ -148,7 +148,11 @@ def hex_dump(data: bytes, start: int = 0, width: int = 16) -> str:
 
 
 def windows_to_wsl(path: Path) -> str:
-    text = str(path.resolve())
+    text = str(path)
+    # POSIX resolve() treats C:/... as a relative filename and destroys its drive.
+    # Native paths still need resolution; absolute Windows paths can be parsed anywhere.
+    if os.name == "nt" or not PureWindowsPath(text).is_absolute():
+        text = str(path.resolve())
     pure = PureWindowsPath(text)
     if pure.drive and len(pure.drive) == 2:
         rest = "/".join(pure.parts[1:])

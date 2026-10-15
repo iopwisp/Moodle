@@ -172,11 +172,24 @@ def test_helpers() -> None:
     rules = parse_scalpel_conf("# jpg y 1 \\xff\\xd8 \\xff\\xd9\npng y 5000000 \\x89\\x50\\x4e\\x47 \\x49\\x45\\x4e\\x44\nzip y 10 PK\\x03\\x04 REVERSE")
     assert [r.extension for r in rules] == ["png", "zip"]
     assert rules[0].header == b"\x89PNG" and rules[1].mode == "REVERSE"
-    assert windows_to_wsl(Path("C:/Users/x/image.dd")).startswith("/mnt/c/") or not str(Path("C:/")).startswith("C:")
+    assert windows_to_wsl(Path("C:/Users/x/image.dd")) == "/mnt/c/Users/x/image.dd"
 
 
-def test_assignment3_style_pipeline_end_to_end(tmp_path: Path, config, registry) -> None:
+@pytest.mark.parametrize("source,expected", [
+    ("C:/Users/x/image.dd", "/mnt/c/Users/x/image.dd"),
+    (r"D:\Lab Files\image.dd", "/mnt/d/Lab Files/image.dd"),
+    ("E:/lab/evidence.dd", "/mnt/e/lab/evidence.dd"),
+])
+def test_windows_to_wsl_preserves_drive_on_every_platform(source, expected):
+    assert windows_to_wsl(Path(source)) == expected
+
+
+def test_assignment3_style_pipeline_end_to_end(tmp_path: Path, config, registry, monkeypatch) -> None:
     """Assignment ZIP -> analyzer -> planner -> runner -> verification -> evidence -> DOCX/PDF."""
+    # This scenario deliberately tests missing external tools even on Linux machines
+    # that already have Foremost/TSK installed. Built-in carving still runs for real.
+    monkeypatch.setattr("lab_agent.integrations.forensics.ForensicsAdapter._tool",
+                        lambda self, name, context: None)
     upload = build_assignment_zip(tmp_path)
     workspace, state, planner = run_assignment([upload], tmp_path / "workspaces", "deterministic", config=config,
                                                registry=registry, screenshot_fn=fake_screenshot,
