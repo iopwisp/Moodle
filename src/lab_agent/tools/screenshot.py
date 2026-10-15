@@ -7,6 +7,7 @@ never receive an empty or placeholder file.
 from __future__ import annotations
 
 import re
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -157,6 +158,8 @@ def find_window_rect(title_re: str, *, focus: bool = True, timeout: float = 5.0)
 
 
 def _is_foreground(handle: int) -> bool:
+    if sys.platform != "win32":
+        return True
     try:
         import ctypes
 

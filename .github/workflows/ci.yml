@@ -40,5 +40,6 @@ jobs:
       - name: CLI smoke test
         run: |
           python -m lab_agent.cli capabilities --tool core
+          python -m lab_agent.cli capabilities --tool kali
           python -m lab_agent.cli plugins
           python -m lab_agent.cli doctor --no-wsl --json

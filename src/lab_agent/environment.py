@@ -75,7 +75,7 @@ def _roots() -> list[Path]:
 
 
 def _registry_entries() -> list[dict[str, str]]:
-    if os.name != "nt":
+    if sys.platform != "win32":
         return []
     try:
         import winreg

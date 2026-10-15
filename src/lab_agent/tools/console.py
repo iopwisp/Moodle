@@ -18,7 +18,6 @@ press a named key, ``{{`` and ``}}`` type literal braces.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -75,6 +74,8 @@ def launcher_script(command: list[str], *, title: str, cols: int, lines: int, cw
 
 def process_tree() -> list[tuple[int, int, str]]:
     """``(pid, parent_pid, exe_name)`` for every process (Windows Toolhelp snapshot)."""
+    if sys.platform != "win32":
+        raise ConsoleError("Console process discovery requires Windows.")
     import ctypes
     from ctypes import wintypes
 
@@ -135,7 +136,7 @@ class ConsoleSession:
     @classmethod
     def launch(cls, executable: str, args: list[str], *, cwd: Path, title: str, cols: int = 120, lines: int = 32,
                run_as_invoker: bool = False, start_timeout: float = 20.0) -> ConsoleSession:
-        if os.name != "nt":
+        if sys.platform != "win32":
             raise ConsoleError("Console automation needs Windows (conhost).")
         cwd.mkdir(parents=True, exist_ok=True)
         launcher = cwd / f"_console_{re.sub(r'[^A-Za-z0-9]+', '_', title)[:40]}.cmd"
@@ -212,6 +213,8 @@ class ConsoleSession:
 
 # ---------------------------------------------------------------------------- helper process (attached to the console)
 def _attach(pid: int):  # type: ignore[no-untyped-def]
+    if sys.platform != "win32":
+        raise ConsoleError("Console attachment requires Windows.")
     import ctypes
     from ctypes import wintypes
 

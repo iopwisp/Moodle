@@ -19,13 +19,32 @@
 
 ## Установка
 
+Поддерживаемая версия находится в `main`; в неё включены Autopsy, реестр
+интеграций, Packet Tracer и Kali/VirtualBox. Старые ветки разработки сохранены
+как история уже объединённых изменений. Их счётчики Ahead/Behind могут
+отличаться после объединения нескольких коммитов в один (squash).
+
+Для нового компьютера с Windows, Git и Python 3.12:
+
 ```powershell
-py -3.12 -m pip install -e ".[all]"
-py -3.12 -m playwright install chromium
-copy config.example.yaml config.yaml   # по желанию: ФИО, группа, разрешённые хосты, AI
+git clone --branch main https://github.com/iopwisp/Moodle.git DoneAsik
+cd DoneAsik
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[all]"
+.\.venv\Scripts\python.exe -m playwright install chromium
+Copy-Item config.example.yaml config.yaml
+.\.venv\Scripts\python.exe -m lab_agent.cli doctor --no-wsl
 ```
 
-Если `Scripts` не в `PATH`, вместо `lab-agent` используйте `py -3.12 -m lab_agent.cli`.
+Далее команды `lab-agent` выполняйте в активированной `.venv` либо заменяйте
+`lab-agent` на `.\.venv\Scripts\python.exe -m lab_agent.cli`.
+Для web-панели: `.\.venv\Scripts\python.exe -m lab_agent.cli serve`.
+
+Для GUI-лабораторных установите соответствующие приложения: Packet Tracer,
+Autopsy, VirtualBox и другие. `doctor` показывает, какие зависимости доступны.
+Для Kali подготовьте свою VM и SSH-подключение по [инструкции](docs/kali.md).
+ФИО, разрешённые стенды и параметры своей VM задайте в локальном `config.yaml`.
+Приватный SSH-ключ создаётся на компьютере пользователя.
 
 ## Проверка окружения
 

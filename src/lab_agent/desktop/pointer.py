@@ -11,7 +11,7 @@ rectangles and ``PrintWindow`` captures on scaled displays.
 
 from __future__ import annotations
 
-import os
+import sys
 import time
 from typing import Any, Protocol
 
@@ -28,7 +28,7 @@ class Pointer(Protocol):
 
 
 def make_dpi_aware() -> None:
-    if os.name != "nt":
+    if sys.platform != "win32":
         return
     import ctypes
 
@@ -66,7 +66,7 @@ class RealPointer:
     # -- window handling -----------------------------------------------------------
     def _front(self, window: Any) -> None:
         handle = _handle(window)
-        if handle is None or os.name != "nt":
+        if handle is None or sys.platform != "win32":
             return
         import ctypes
 
@@ -85,7 +85,7 @@ class RealPointer:
 
     def _english(self, window: Any) -> None:
         handle = _handle(window)
-        if handle is None or os.name != "nt":
+        if handle is None or sys.platform != "win32":
             return
         import ctypes
 

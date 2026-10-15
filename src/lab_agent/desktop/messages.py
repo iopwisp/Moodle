@@ -12,7 +12,7 @@ which polls the physical mouse.  Those still need :class:`~lab_agent.desktop.poi
 
 from __future__ import annotations
 
-import os
+import sys
 import time
 from typing import Any, Protocol
 
@@ -52,7 +52,7 @@ def restore_minimized(title_part: str) -> int:
     A minimized Packet Tracer shows UI Automation a bare "Cisco Packet Tracer" title and no controls, so its project
     window cannot even be found until it is restored.  Returns how many windows were restored.
     """
-    if os.name != "nt":
+    if sys.platform != "win32":
         return 0
     import ctypes
     from ctypes import wintypes
@@ -79,8 +79,12 @@ def restore_minimized(title_part: str) -> int:
 class MessagePoster:
     """Posts mouse and keyboard messages to a window; screen coordinates are converted to its client area."""
 
+    _user32: Any
+    _ctypes: Any
+    pause: float
+
     def __init__(self, *, pause: float = 0.03) -> None:
-        if os.name != "nt":
+        if sys.platform != "win32":
             raise RuntimeError("Posted window messages are only available on Windows.")
         import ctypes
 

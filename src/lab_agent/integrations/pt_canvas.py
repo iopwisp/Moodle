@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -194,6 +195,8 @@ class PTCanvas:
         while ``PrintWindow`` draws the whole Win32 window rectangle ((-11, -11)); using the UIA rectangle shifted
         every survey click about 40 px down.
         """
+        if sys.platform != "win32":
+            return self._rect(self.window)
         handle = getattr(self.window, "handle", None)
         if handle:
             try:
@@ -208,6 +211,8 @@ class PTCanvas:
         return self._rect(self.window)
 
     def _scale(self) -> float:
+        if sys.platform != "win32":
+            return 1.0
         handle = getattr(self.window, "handle", None)
         try:
             import ctypes
