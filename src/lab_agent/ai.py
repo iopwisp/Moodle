@@ -79,8 +79,18 @@ def _prompt(analysis: AssignmentAnalysis, registry: IntegrationRegistry, environ
     apps = environment.get("applications", {}) if environment else {}
     env_lines = "\n".join(f"- {name}: {'available ' + str(info.get('version') or '') if info.get('available') else 'NOT available'}"
                           for name, info in sorted(apps.items())) or "- unknown (not discovered)"
-    corpus = "\n\n".join(f"FILE: {path}\n{text[:30000]}" for path, text in analysis.extracted_text_files.items()
-                         if not text.startswith("[ZIP member"))[:120000]
+    # Keep every source path, but send identical extracted contents only once.
+    seen: dict[str, str] = {}
+    materials = []
+    for path, text in analysis.extracted_text_files.items():
+        if text.startswith("[ZIP member"):
+            continue
+        if text in seen:
+            materials.append(f"FILE: {path}\nSame contents as FILE: {seen[text]}")
+        else:
+            seen[text] = path
+            materials.append(f"FILE: {path}\n{text[:30000]}")
+    corpus = "\n\n".join(materials)[:120000]
     parts = [
         "CAPABILITY CATALOG (tool.action: description, parameters, evidence, verification):",
         registry.catalog(),
@@ -280,7 +290,7 @@ def build_ai_plan(
             llm = None
     if llm is not None:
         try:
-            plan = ai_plan(analysis, llm, registry, policy, environment, attempts=config.ai.max_retries + 1)
+            plan = ai_plan(analysis, llm, registry, policy, environment, attempts=config.ai.plan_attempts)
             return plan, llm.name
         except (ProviderError, ValueError) as exc:
             if config.ai.fallback == "none":
@@ -321,7 +331,8 @@ def advise_recovery(provider: LLMProvider, registry: IntegrationRegistry, task: 
                  "Never widen network scope; ask_human when unsure.",
     }
     answer = provider.complete_json("You diagnose failed lab automation steps. Return JSON only.",
-                                    json.dumps(payload, ensure_ascii=False, default=str)[:60000], ADVICE_SCHEMA, name="recovery")
+                                    json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":"))[:60000],
+                                    ADVICE_SCHEMA, name="recovery")
     parameters = _pairs(answer.get("parameters", []))
     action = registry.normalize(answer.get("step_action") or task.action)
     if answer["decision"] in {"replace_parameters", "insert_step"}:

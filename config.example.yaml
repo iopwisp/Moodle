@@ -8,7 +8,8 @@ ai:
   model: null               # e.g. gpt-6-astra (OpenAI) or qwen2.5:14b (Ollama)
   base_url: null            # OpenAI-compatible endpoint or Ollama host
   timeout_seconds: 90
-  max_retries: 2            # provider retries and plan re-validation attempts
+  max_retries: 2            # transport retries per provider request
+  plan_attempts: 2          # total plan generations, including validation corrections
   fallback: deterministic   # deterministic | none (fail instead of falling back)
   recovery_advice: true     # ask the AI for corrected parameters after a failed verification
 

@@ -158,7 +158,7 @@ class LLMDecider:
             "visible_controls": observation.summary(), "recent_history": history[-6:],
             "rules": "Choose one visible control by element_index (or -1 for none). Never use coordinates. "
                      "Use give_up when the goal cannot be reached safely.",
-        }, ensure_ascii=False)
+        }, ensure_ascii=False, separators=(",", ":"))
         try:
             answer = self.provider.complete_json(
                 "You operate a desktop application through accessibility controls only.", prompt, self.SCHEMA)

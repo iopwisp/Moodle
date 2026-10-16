@@ -243,3 +243,13 @@ $env:LAB_AGENT_REAL_APPS = "1"; py -3.12 -m pytest -q -k real       # + наст
 
 Используйте Burp, браузер и сетевые инструменты только на локальных, намеренно уязвимых
 или явно разрешённых учебных стендах.
+
+## Быстрый контекст для агента
+
+Для полного задания: `py -3.12 -m lab_agent.cli assignment <instruction> <data>`;
+для выполнения подготовленного плана: `assignment --workspace <workspace> --execute`.
+[Порядок работы и критерии сдачи](docs/assignment_workflow.md).
+
+`py -3.12 -m lab_agent.cli context <workspace>` показывает компактную сводку сохранённого состояния.
+`py -3.12 -m lab_agent.cli scenario scenarios/hash_inputs.yaml <inputs> --execute` запускает готовый
+сценарий через обычные проверки без AI-планирования. [Формат и примеры](docs/agent_context.md).

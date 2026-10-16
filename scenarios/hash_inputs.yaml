@@ -1,0 +1,6 @@
+name: hash-inputs
+objective: Calculate input hashes and preserve the original files.
+steps:
+  - action: core.hash_inputs
+    title: Calculate input hashes
+    evidence_type_required: hash

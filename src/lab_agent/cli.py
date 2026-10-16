@@ -90,8 +90,28 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--workspace-root", type=Path)
     provider(p)
     targets(p)
+    p = sub.add_parser("assignment", help="Prepare or resume an assignment; deterministic planning by default")
+    p.add_argument("paths", nargs="*", type=Path)
+    p.add_argument("--workspace", type=Path)
+    p.add_argument("--workspace-root", type=Path)
+    p.add_argument("--scenario", type=Path)
+    p.add_argument("--execute", action="store_true")
+    provider(p)
+    p.set_defaults(ai_provider="deterministic")
+    targets(p)
     p = sub.add_parser("status", help="Show saved workflow state and evidence validation")
     p.add_argument("workspace")
+    p = sub.add_parser("context", help="Compact saved workspace context; no AI calls")
+    p.add_argument("workspace")
+    p.add_argument("--limit", type=int, default=5)
+    p.add_argument("--step", type=int)
+    p.add_argument("--verify", action="store_true", help="Re-hash registered evidence now")
+    p = sub.add_parser("scenario", help="Prepare a reusable YAML plan without AI planning; optionally execute")
+    p.add_argument("scenario_file", type=Path)
+    p.add_argument("paths", nargs="+", type=Path)
+    p.add_argument("--workspace-root", type=Path)
+    p.add_argument("--execute", action="store_true")
+    targets(p)
     p = sub.add_parser("resume", help="Re-validate evidence, reconcile interrupted steps and continue")
     p.add_argument("workspace")
     p.add_argument("--verify-only", action="store_true")
@@ -278,6 +298,42 @@ def main(argv: list[str] | None = None) -> int:
                     "reports": {"docx": str(workspace / "reports" / f"{state.assignment}_Report.docx"),
                                 "pdf": str(workspace / "reports" / f"{state.assignment}_Report.pdf")}})
             return 0 if state.status == "COMPLETED" else 3
+        elif command == "assignment":
+            from .orchestration import orchestrate_assignment
+
+            registry = _registry()
+            try:
+                assignment_result = orchestrate_assignment(args.paths, _root(args), workspace=args.workspace,
+                                                 scenario=args.scenario, execute=args.execute,
+                                                 provider=args.ai_provider, model=args.model, config=config,
+                                                 registry=registry, allowed_targets=_targets(args))
+                print(json.dumps(assignment_result, ensure_ascii=False, separators=(",", ":"), default=str))
+            finally:
+                registry.shutdown()
+            return 0 if not args.execute or assignment_result.get("execution_ready") else 3
+        elif command == "context":
+            from .context import workspace_context
+
+            print(json.dumps(workspace_context(_workspace_arg(args.workspace), limit=args.limit,
+                                               step_id=args.step, verify=args.verify),
+                             ensure_ascii=False, separators=(",", ":"), default=str))
+        elif command == "scenario":
+            from .context import workspace_context
+            from .scenarios import plan_scenario
+
+            offline = config.model_copy(deep=True)
+            offline.ai.provider = "deterministic"
+            offline.ai.recovery_advice = False
+            registry = _registry()
+            try:
+                workspace = plan_scenario(args.scenario_file, args.paths, _root(args), config=offline,
+                                          registry=registry, allowed_targets=_targets(args))
+                if args.execute:
+                    execute_workspace(workspace, _targets(args), config=offline, registry=registry)
+                _print(workspace_context(workspace))
+            finally:
+                registry.shutdown()
+            return 0 if not args.execute or load_state(workspace).status == "COMPLETED" else 3
         elif command == "status":
             workspace = _workspace_arg(args.workspace)
             state = load_state(workspace)
@@ -378,28 +434,10 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("--description is required when registering evidence")
                 print(register_evidence(workspace, workspace / args.path, args.description, args.type, args.step).model_dump_json(indent=2))
         elif command == "review":
+            from .delivery import review_workspace
+
             workspace = _workspace_arg(args.workspace)
-            state = load_state(workspace)
-            integrity = validate_evidence(workspace)
-            evidence = list_evidence(workspace)
-            required = [t for t in state.plan.steps if t.required]
-            summary: dict[str, object] = {
-                "assignment": state.assignment, "status": state.status, "reason": state.status_reason,
-                "required_steps": len(required), "completed_steps": len([t for t in required if t.status == TaskStatus.COMPLETED]),
-                "failed_steps": [t.id for t in state.plan.steps if t.status == TaskStatus.FAILED],
-                "blocked_steps": [t.id for t in state.plan.steps if t.status == TaskStatus.BLOCKED],
-                "evidence_count": len(evidence), "invalid_evidence": [c for c in integrity if not c["verified"]],
-                "screenshot_count": sum(item.type == "screenshot" for item in evidence),
-                "missing_required_evidence_steps": [
-                    t.id for t in state.plan.steps if t.evidence_required and not any(
-                        item.step_id == t.id and (t.evidence_type_required is None or item.type == t.evidence_type_required)
-                        for item in evidence)],
-                "inputs_unchanged": verify_inputs_unchanged(workspace), "ready": False, "report_path": None,
-            }
-            summary["ready"] = (summary["completed_steps"] == summary["required_steps"] and not summary["failed_steps"]
-                                and not summary["invalid_evidence"] and not summary["missing_required_evidence_steps"])
-            report = workspace / "reports" / f"{state.assignment}_Report.docx"
-            summary["report_path"] = str(report) if report.exists() else None
+            summary = review_workspace(workspace)
             _write_json(workspace / "execution_summary.json", summary)
             _print(summary)
         elif command == "report":

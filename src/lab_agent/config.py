@@ -26,6 +26,7 @@ class AIConfig(BaseModel):
     base_url: str | None = None
     timeout_seconds: float = 90.0
     max_retries: int = 2
+    plan_attempts: int = Field(default=2, ge=1, le=10)
     fallback: Literal["deterministic", "none"] = "deterministic"
     recovery_advice: bool = True
 

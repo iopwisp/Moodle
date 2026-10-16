@@ -1,0 +1,14 @@
+name: verify-image
+objective: Hash supplied inputs and compare the evidence image with its supplied SHA256 checksum.
+# Supply files named evidence.dd and evidence.dd.sha256, or adjust the paths below.
+steps:
+  - action: core.hash_inputs
+    title: Record hashes of input files
+    evidence_type_required: hash
+  - action: core.verify_hash
+    title: Verify image against supplied checksum
+    parameters:
+      path: input/evidence.dd
+      expected_file: input/evidence.dd.sha256
+      algorithm: sha256
+    evidence_type_required: hash

@@ -129,6 +129,46 @@ def test_invalid_ai_plan_gets_feedback_then_fallback(tmp_path: Path, registry, c
     assert planner == "deterministic" and "fallback" in plan.planner and plan.warnings
 
 
+def test_plan_budget_is_independent_of_transport_retries(tmp_path: Path, registry, config) -> None:
+    source = tmp_path / "lab.txt"
+    source.write_text("Hash the evidence", encoding="utf-8")
+    config.ai.max_retries = 5
+    config.ai.plan_attempts = 1
+    provider = ScriptedProvider(lambda s, u, schema: {
+        "objective": "Hash", "steps": [_step("core.hash_file", {"bogus": "1"})]})
+    _, planner = build_ai_plan(analyze([source]), "openai", registry=registry, config=config, llm=provider,
+                               environment={"applications": {}})
+    assert planner == "deterministic"
+    assert len(provider.calls) == 1
+
+
+def test_duplicate_materials_keep_paths_and_distinct_requirements(tmp_path: Path, registry) -> None:
+    from lab_agent.ai import _prompt
+
+    source = tmp_path / "lab.txt"
+    source.write_text("Hash evidence", encoding="utf-8")
+    analysis = analyze([source])
+    repeated = "Calculate the SHA256 hash and preserve the original.\n" * 200
+    different = repeated + "Also answer question 7."
+    analysis.extracted_text_files = {"input/a.txt": repeated, "input/copy.txt": repeated,
+                                     "input/extra.txt": different}
+    prompt = _prompt(analysis, registry, None, set())
+    materials = prompt.split("ASSIGNMENT MATERIALS:\n", 1)[1]
+    assert "FILE: input/copy.txt\nSame contents as FILE: input/a.txt" in materials
+    assert "Also answer question 7." in materials
+    assert len(materials) < len(repeated) * 3
+
+
+def test_plan_budget_validation() -> None:
+    from pydantic import ValidationError
+
+    from lab_agent.config import AIConfig
+
+    for value in (0, 11):
+        with pytest.raises(ValidationError):
+            AIConfig(plan_attempts=value)
+
+
 def test_ai_cannot_expand_network_scope(tmp_path: Path, registry, config) -> None:
     source = tmp_path / "lab.txt"
     source.write_text("1. Visit the site\n", encoding="utf-8")

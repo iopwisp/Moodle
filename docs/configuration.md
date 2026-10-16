@@ -9,7 +9,8 @@ Start from [`config.example.yaml`](../config.example.yaml); `lab-agent config` p
 | --- | --- |
 | `workspace_root` | where workspaces are created (default `workspace`) |
 | `ai.provider` | `auto` (OpenAI if `OPENAI_API_KEY`, else Ollama if `OLLAMA_HOST`, else deterministic), `openai`, `ollama`, `codex`, `deterministic`. `codex` runs the Codex CLI (`codex exec`) with the ChatGPT plan Codex is signed in with: no API key; it is never picked by `auto`, because every call uses the plan's quota |
-| `ai.model`, `ai.base_url`, `ai.timeout_seconds`, `ai.max_retries` | provider settings; retries also cover re-planning after validation errors |
+| `ai.model`, `ai.base_url`, `ai.timeout_seconds`, `ai.max_retries` | provider settings; retries cover transport failures |
+| `ai.plan_attempts` | total plan generations, including validation corrections (default 2, range 1–10); independent of transport retries |
 | `ai.fallback` | `deterministic` (record the fallback) or `none` (fail) |
 | `ai.recovery_advice` | ask the AI for corrected parameters after a failed verification (validated before use) |
 | `execution.max_attempts` | attempts per step (first try included) |
@@ -47,3 +48,14 @@ Start from [`config.example.yaml`](../config.example.yaml); `lab-agent config` p
 | `LAB_AGENT_OVERLEAF_EMAIL`, `LAB_AGENT_OVERLEAF_PASSWORD` | Overleaf credentials (or store them in the OS keyring, service `doneasik-lab-agent`) |
 
 Secrets are read only from the environment or the OS keyring and are masked in logs, SQLite events, reports and AI prompts.
+
+## Reducing AI request size
+
+The planner sends identical extracted file contents once and references the first source from each duplicate path.
+Distinct contents remain separate, with the existing per-file and total text limits. Browser, desktop and recovery
+requests use compact JSON without removing observation fields. Plans and evidence still pass the same validation.
+
+`ai.plan_attempts: 2` permits an initial plan and one correction. Set it to `1` to avoid correction calls;
+the configured `ai.fallback` then determines whether a rejected plan falls back or fails. Transport retries
+remain separate: at the defaults, up to 2 × (2 + 1) provider attempts are possible during planning.
+These controls reduce repeated requests and prompt size; actual token savings depend on the inputs and model.
