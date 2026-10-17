@@ -43,6 +43,12 @@ def _cap(name: str, description: str, params: tuple[Param, ...] = (), evidence_t
 class BrowserAdapter(BrowserNarration, BaseIntegration):
     name = "browser"
     CAPABILITIES = (
+        _cap("run_task", "Adapt to a web lab: observe visible controls, ask AI, act and verify a supplied success condition",
+             (URL, Param("goal", "str", True), Param("expected_text", "str"), Param("success_selector", "str"),
+              Param("max_steps", "int"), Param("provider", "str"), Param("model", "str"),
+              Param("secret_names", "list", False, "credential environment names the model may reference"),
+              Param("execution_id", "str", False, "change only for an intentional new attempt")),
+             ("json", "screenshot"), "visible success condition and actual Windows PrintWindow evidence", network=True),
         _cap("launch", "Start the browser session (headed by default)", (Param("headless", "bool"), Param("proxy", "str")), (),
              "browser session is running"),
         _cap("navigate", "Open an authorized URL in the current session", (URL,), ("screenshot",),
@@ -78,10 +84,12 @@ class BrowserAdapter(BrowserNarration, BaseIntegration):
     def _policy(self, context: ExecutionContext) -> PolicyEngine:
         from ..config import get_config
 
-        return PolicyEngine(context.config or self.config or get_config(), context.allowed_targets)
+        return PolicyEngine(context.config or self.config or get_config(), context.allowed_targets,
+                            workspace=context.workspace)
 
     def ensure_session(self, context: ExecutionContext, *, headless: bool | None = None, proxy: str | None = None) -> BrowserSession:
-        if self.session is not None and self.session.active and (proxy is None or proxy == self.session.proxy):
+        if (self.session is not None and self.session.active and (proxy is None or proxy == self.session.proxy)
+                and (headless is None or headless == self.session.headless)):
             return self.session
         if self.session is not None:
             self.session.close()
@@ -113,6 +121,11 @@ class BrowserAdapter(BrowserNarration, BaseIntegration):
         return output
 
     # ------------------------------------------------------------------ capabilities
+    def run_task(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
+        from .browser_agent import run_browser_task
+
+        return run_browser_task(self, parameters, context)
+
     def launch(self, parameters: dict[str, Any], context: ExecutionContext) -> IntegrationResult:
         headless = param_bool(parameters, "headless") if "headless" in parameters else None
         session = self.ensure_session(context, headless=headless, proxy=param_str(parameters, "proxy") or None)

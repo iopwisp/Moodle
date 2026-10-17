@@ -106,6 +106,18 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=5)
     p.add_argument("--step", type=int)
     p.add_argument("--verify", action="store_true", help="Re-hash registered evidence now")
+    p = sub.add_parser("lab-passport", help="Create or inspect recorded assignment lab scope")
+    p.add_argument("workspace")
+    p.add_argument("--create", action="store_true")
+    p.add_argument("--name")
+    p.add_argument("--purpose")
+    p.add_argument("--owner")
+    p.add_argument("--source", help="Workspace-relative assignment or authorization text file")
+    p.add_argument("--excerpt", help="Verbatim authorization excerpt in source")
+    p.add_argument("--target", action="append", default=[])
+    p.add_argument("--action", action="append", default=[])
+    p.add_argument("--restriction", action="append", default=[])
+    p.add_argument("--replace", action="store_true")
     p = sub.add_parser("scenario", help="Prepare a reusable YAML plan without AI planning; optionally execute")
     p.add_argument("scenario_file", type=Path)
     p.add_argument("paths", nargs="+", type=Path)
@@ -311,6 +323,26 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 registry.shutdown()
             return 0 if not args.execute or assignment_result.get("execution_ready") else 3
+        elif command == "lab-passport":
+            from .lab_passport import passport_summary, save_passport
+
+            workspace = _workspace_arg(args.workspace)
+            if args.create:
+                fields = ("name", "purpose", "owner", "source", "excerpt")
+                if any(not getattr(args, f) for f in fields):
+                    raise ValueError("--create requires --name, --purpose, --owner, --source and --excerpt")
+                registry = _registry()
+                try:
+                    save_passport(workspace, {**{f: getattr(args, f) for f in fields},
+                                              "targets": args.target, "actions": args.action,
+                                              "restrictions": args.restriction},
+                                  {c.name for c in registry.capabilities()}, replace=args.replace)
+                finally:
+                    registry.shutdown()
+            elif args.replace or any((args.name, args.purpose, args.owner, args.source, args.excerpt,
+                                       args.target, args.action, args.restriction)):
+                raise ValueError("Use --create to supply passport fields or --replace")
+            _print(passport_summary(workspace))
         elif command == "context":
             from .context import workspace_context
 

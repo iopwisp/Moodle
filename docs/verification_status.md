@@ -18,6 +18,7 @@ Recorded on 2026-09-30, updated 2026-10-01 and 2026-10-05; Windows 11 23H2 (10.0
 | wireshark (tshark/capinfos analysis) | ✓ mocked runner | ✓ real TShark 4.4.2 (packet counts, filters, field export, filtered export) | — |
 | wireshark (GUI) | ✓ fake driver | — | ✓ Wireshark 4.4.2: launch with `-r/-Y`, main window by class `WiresharkMainWindow`, window-only screenshot, filter shown in GUI, update pop-up selectors (`Remind me later`), display-filter entry selector, clean close |
 | browser (Playwright session, scope guard) | ✓ (Chromium installed in CI) | ✓ real Chromium: navigate/type/select/click/wait/read/inspect/download; redirect and link to unauthorized host blocked | headless and headed supported; headed not exercised in tests |
+| browser.run_task (adaptive AI loop) | not run in CI; ruff/mypy checked locally | 2026-10-15: real Ollama `qwen3:4b`, thinking off, 16384 context: two local multi-page forms with different labels/order and randomized field names, six AI-selected actions each; both accepted by the server. The same two variants also completed through the real Codex CLI provider (`summary_4c90f192_1.json`, `summary_4c90f192_2.json`). | ✓ headed Chromium with real Windows PrintWindow frames before actions and at success. Evidence: `workspace/BrowserAgentDemo/summary_2b1118b8_1.json` and `summary_2b1118b8_2.json`. These are local demonstrations, not a claim of success on external lab platforms. |
 | burp (proxy, intercept/forward measurement, response inspection) | ✓ fake proxy that behaves like Burp (Ctrl+T toggles, Forward releases the oldest held request, Intercept off releases all) | ✓ local test site on 127.0.0.1:8000 | ✓ Burp Community 2026.8: start-up wizard passed with Enter/Enter when needed, proxy verified via http://burp/, request through the proxy, Intercept on with the request held (measured), Send to Repeater, Forward until our request passed (5 forwards with a stale queue), Intercept switched off and verified, Chromium through Burp to localhost; clean window screenshots of Intercept and Repeater. Hotkeys need the Burp window in focus: do not touch mouse/keyboard during these steps. |
 | packet_tracer (topology model, IOS CLI, PC command prompt, ping parsing) | ✓ fake IOS console | — | Packet Tracer 8.2.2: discovery (8.2.2.400), launch, main window class `CAppWindow`, login wall `CNetspaceLogin` detected → BLOCKED, agent-launched processes terminated ✓. Started without a file it shows the Cisco login window; **opening a `.pka` starts it in Guest mode** (2026-10-05): `lab-agent run` on the Create a Simple Network activity (`.htm` instructions + `.pka`) completed open_project and capture_topology with window-only screenshots of the project's own window while the student's Packet Tracer was also open, and no duplicate instances on retry. The canvas work of that activity (devices, cables, laptop module swap, DHCP, wireless, ping, browser) was then done by driving the GUI with screenshots and mouse/keyboard outside the integration; Packet Tracer's Check Results reported 100%. The same day the canvas automation was built into the integration and run on real PT 8.2.2 (150 % scaling) on a fresh copy of that activity: `survey_canvas` found Wireless Router, Internet and cisco.srv; `add_device` placed and renamed PC, Laptop and Cable Modem; `connect_devices` made the two straight-through links and the coaxial link through Packet Tracer's port menus; `configure_pc dhcp` got 192.168.0.2 via `ipconfig /renew` read from the real Command Prompt; `verify_connectivity PC -> cisco.srv` parsed 4/4 replies. Later the same day the canvas, Simulation mode and the PC Command Prompt were moved to **posted window messages** (no focus, no real mouse) and run through `lab-agent do` on a copy of the completed activity while another program was in front: `survey_canvas`, `add_device` (click on the model, click on the canvas), `rename_device`, `connect_devices` (port menu clicked by message) and `list_topology` (Workspace List: 6 devices, 5-6 links); `set_event_filters` DNS+HTTP (filter boxes only react to clicks - not to the Toggle pattern or Space - and the dialog cuts its third column off at 150 %, so it is widened first); `trace_traffic PC -> cisco.srv` read 19 events and both paths `PC > Wireless Router > Cable Modem > Internet > cisco.srv` and back in 18 Capture/Forward steps (the dock is widened by a posted separator drag because Qt exposes only on-screen columns, then restored); the same with `ping` (ICMP); `delete_link cisco.srv / Internet:Eth6` removed the link (Workspace List 5 -> 4, gone from the canvas) and the next `trace_traffic` failed honestly with DNS stopping at Internet; Undo restored it; `traceroute PC -> cisco.srv` parsed 2 hops; `configure_pc dhcp` and `verify_connectivity` 4/4 through posted keys. With a browser window in front, every one of these steps left it in front: UIA Invoke and SetValue had brought Packet Tracer forward, so buttons and the URL field also get posted input now. Found on the way: UIA `read_text` de-duplicated repeated console lines (a second identical tracert/ping merged with the first) - fixed with `read_lines`. Router/switch IOS CLI is still **not verified** on real devices: the activities at hand hide the CLI tab and Guest mode cannot start a blank topology. Module swaps and PC Wireless are not automated. |
 | console (TestDisk, PhotoRec, shells in conhost; keys without focus, screen as text, window screenshots) | ✓ fake session; key syntax, launcher, process tree, safety rules | ✓ real TestDisk 7.2 (`LAB_AGENT_REAL_APPS=1 pytest -k real`) | ✓ TestDisk 7.2 on the Assignment 4 MBR image: start, partition-table screen read as text (Intel detected), two clean window screenshots, close |
@@ -44,3 +45,32 @@ Scalpel and TSK in WSL and the Autopsy 4.23.1 ingest; the remaining step (analyt
 
 The earlier materials in `~/Downloads/Assignment_3_Student_Materials.zip` (image `323e0664…0e0b`) contain no file system
 that TSK recognises at offset 0: `fsstat` fails and the optional step is reported as such; everything else completes.
+
+## Kali lab scenarios - 2026-10-16
+
+`kali_labs` adds fixed jobs through the existing SSH terminal / Windows
+PrintWindow bridge, without modifying the runner or report generator.
+See [usage and limits](kali_labs.md).
+
+Live evidence is in `workspace/Kali_Labs_Check/`:
+
+- `preflight.json`: verified inventory; zero OpenVAS NASL files, no GSA/ZAP/
+  RainbowCrack and no compatible Hashcat compute backend were observed.
+- `john.json`: John recovered all five supplied educational MD5 entries;
+  recovered plaintexts were rehashed against input and PrintWindow evidence
+  was registered.
+- `dvwa_sql.json`: local DVWA Low returned five user records using the fixed
+  read-only SQL test.
+- `dvwa_xss.json`: local DVWA High produced the actual
+  `DoneAsik_XSS_test` alert. The registered screenshot is the guest terminal
+  after the test browser closes, not an image of the alert itself.
+- `nikto.json`: Nikto 2.6.0 ran against guest loopback, exported real TXT/CSV,
+  and reached the requested five-second limit. The adapter correctly kept
+  `status=partial`, `verified=false`; this is not a completed scan claim.
+- `hashcat.json`: the actual missing OpenCL/compute backend produced
+  `status=blocked`, `verified=false`; no password recovery was attributed to it.
+
+An initial Nikto invocation used an unsupported option and an initial XSS
+payload failed; both were corrected and tested again. Empty PrintWindow
+frames were blocked before execution; bringing the VM window back into view
+allowed subsequent captures. No fallback desktop screenshots were used.

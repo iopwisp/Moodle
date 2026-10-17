@@ -12,6 +12,8 @@ ai:
   plan_attempts: 2          # total plan generations, including validation corrections
   fallback: deterministic   # deterministic | none (fail instead of falling back)
   recovery_advice: true     # ask the AI for corrected parameters after a failed verification
+  ollama_think: null        # false: faster Qwen3 actions; null: model default
+  ollama_num_ctx: null      # e.g. 16384 for browser observations; null: Ollama default
 
 execution:
   max_attempts: 2           # per step, including the first try

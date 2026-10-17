@@ -129,15 +129,22 @@ class OpenAIProvider:
 class OllamaProvider:
     name = "ollama"
 
-    def __init__(self, model: str, *, timeout: float = 180, retries: int = 1, base_url: str | None = None) -> None:
+    def __init__(self, model: str, *, timeout: float = 180, retries: int = 1, base_url: str | None = None,
+                 think: bool | None = None, num_ctx: int | None = None) -> None:
         self.model = model
         self.timeout = timeout
         self.retries = retries
         self.base_url = (base_url or os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+        self.think = think
+        self.num_ctx = num_ctx
 
     def complete_json(self, system: str, user: str, schema: dict[str, Any], *, name: str = "answer") -> dict[str, Any]:
-        body = {"model": self.model, "stream": False, "format": schema, "options": {"temperature": 0},
+        body: dict[str, Any] = {"model": self.model, "stream": False, "format": schema, "options": {"temperature": 0},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        if self.think is not None:
+            body["think"] = self.think
+        if self.num_ctx is not None:
+            body["options"]["num_ctx"] = self.num_ctx
         answer = _with_retries(lambda: _post(f"{self.base_url}/api/chat", body, {}, self.timeout), self.retries, self.name)
         try:
             value = json.loads(answer["message"]["content"])
@@ -283,10 +290,12 @@ def make_provider(name: str, model: str | None = None, config: Any = None) -> LL
     if resolved not in PROVIDERS:
         raise ValueError(f"Unknown AI provider {name!r}; available: auto, deterministic, {', '.join(PROVIDERS)}")
     ai = getattr(config, "ai", None)
+    extra = {"think": getattr(ai, "ollama_think", None), "num_ctx": getattr(ai, "ollama_num_ctx", None)} if resolved == "ollama" else {}
     return PROVIDERS[resolved](
         model or getattr(ai, "model", None) or DEFAULT_MODELS[resolved],
         timeout=float(getattr(ai, "timeout_seconds", 90)), retries=int(getattr(ai, "max_retries", 2)),
         base_url=getattr(ai, "base_url", None),
+        **extra,
     )
 
 

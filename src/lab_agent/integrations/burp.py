@@ -140,7 +140,8 @@ class BurpAdapter(BurpNarration, BaseIntegration):
     def _check_scope(self, url: str, context: ExecutionContext) -> None:
         from ..config import get_config
 
-        if not PolicyEngine(context.config or self.config or get_config(), context.allowed_targets).url_allowed(url):
+        if not PolicyEngine(context.config or self.config or get_config(), context.allowed_targets,
+                            workspace=context.workspace).url_allowed(url):
             raise PermissionError(f"{url} is not an authorized target")
 
     def _burp_page(self, port: int) -> tuple[bool, str]:

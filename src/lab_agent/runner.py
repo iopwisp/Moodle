@@ -114,7 +114,7 @@ class Runner:
         self.state = load_state(self.workspace)
         self.db = RunDatabase(self.workspace)
         self.allowed_targets = {t.casefold() for t in (allowed_targets or set())} | set(self._saved_targets())
-        self.policy = PolicyEngine(self.config, self.allowed_targets)
+        self.policy = PolicyEngine(self.config, self.allowed_targets, workspace=self.workspace)
         self.environment = environment
         self.cancel = cancel_event_for(self.workspace)
         advisor = advisor if advisor is not None else provider_from_config(self.config, "recovery")

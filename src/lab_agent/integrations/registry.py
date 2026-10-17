@@ -143,9 +143,19 @@ class IntegrationRegistry:
     ) -> IntegrationResult:
         normalized = self.normalize(name)
         try:
-            adapter, _ = self._capabilities[normalized]
+            adapter, capability = self._capabilities[normalized]
         except KeyError as exc:
             raise ValueError(f"Unsupported capability: {name}") from exc
+        from ..config import get_config
+        from ..lab_passport import passport_denial
+        from ..policy import PolicyEngine
+        from .base import CapabilityBlocked
+
+        reason = passport_denial(context.workspace, capability, parameters,
+                                 PolicyEngine(context.config or get_config(), context.allowed_targets,
+                                              workspace=context.workspace))
+        if reason:
+            raise CapabilityBlocked(reason)
         return adapter.execute(normalized, parameters, context)
 
     def shutdown(self) -> None:

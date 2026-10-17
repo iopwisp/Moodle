@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 workspace/
+.playwright-mcp/
 .idea/
 config.yaml
 environment.json

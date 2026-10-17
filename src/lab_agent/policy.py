@@ -9,6 +9,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -59,11 +60,21 @@ def is_local_host(host: str) -> bool:
 
 
 class PolicyEngine:
-    def __init__(self, config: AgentConfig, extra_targets: set[str] | None = None) -> None:
+    def __init__(self, config: AgentConfig, extra_targets: set[str] | None = None, *, workspace: Path | None = None) -> None:
         self.config = config
         self.targets = config.authorized_targets(extra_targets)
+        self.workspace = workspace
 
     def host_allowed(self, host: str) -> bool:
+        if self.workspace is not None:
+            from .lab_passport import load_passport
+
+            try:
+                passport = load_passport(self.workspace)
+            except (ValueError, OSError):
+                return False
+            if passport is not None and host.casefold() not in passport.targets:
+                return False
         network = self.config.policy.network
         if is_local_host(host):
             return network.localhost
@@ -91,6 +102,12 @@ class PolicyEngine:
         return hosts
 
     def check(self, capability: Capability, parameters: dict[str, Any]) -> PolicyDecision:
+        if self.workspace is not None:
+            from .lab_passport import passport_denial
+
+            reason = passport_denial(self.workspace, capability, parameters, self)
+            if reason:
+                return PolicyDecision.deny(reason)
         tool_policy = self.config.policy.tools.get(capability.tool)
         if tool_policy is not None and not tool_policy.allowed:
             return PolicyDecision.deny(f"Tool '{capability.tool}' is disabled by policy.")

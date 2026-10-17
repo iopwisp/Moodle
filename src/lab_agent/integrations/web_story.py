@@ -19,6 +19,18 @@ def _status_ru(status: Any) -> str:
 
 
 class BrowserNarration:
+    def narrate_run_task(self, facts: StepFacts, language: str) -> Narrative:
+        d = facts.details
+        if language == "ru":
+            text = f"Задание на странице {d.get('url', '')}: {facts.parameters.get('goal', '')}."
+            outcome = ("Заданный признак результата появился на странице." if facts.completed
+                       else f"Выполнение не подтверждено: {d.get('reason', 'условие результата не выполнено')}.")
+            return Narrative("Работа в браузере", [text, outcome], figure_caption="Окно браузера после действий",
+                             outcome_explained=True)
+        return Narrative("Browser task", [f"Opened {d.get('url', '')} for the task: {facts.parameters.get('goal', '')}.",
+                         "The required result was visible." if facts.completed else f"Not completed: {d.get('reason', '')}."],
+                         figure_caption="Browser window after the actions", outcome_explained=True)
+
     def narrate_launch(self, facts: StepFacts, language: str) -> Narrative:
         proxy = facts.details.get("proxy") or facts.parameters.get("proxy")
         if language == "ru":

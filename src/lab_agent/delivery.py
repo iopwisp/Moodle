@@ -8,6 +8,7 @@ from typing import Any
 from .credentials import redact
 from .evidence import list_evidence, validate_evidence
 from .models import TaskStatus
+from .screenshot_review import review_screenshots
 from .workspace import load_state, verify_inputs_unchanged
 
 
@@ -17,6 +18,7 @@ def review_workspace(workspace: Path) -> dict[str, Any]:
     valid_ids = {c["id"] for c in checks if c["verified"]}
     evidence = list_evidence(workspace)
     valid = [e for e in evidence if e.id in valid_ids]
+    screenshot_coverage = review_screenshots(workspace, valid)
     required = [t for t in state.plan.steps if t.required]
     inputs = verify_inputs_unchanged(workspace)
     missing = [t.id for t in state.plan.steps if t.evidence_required and not any(
@@ -29,6 +31,7 @@ def review_workspace(workspace: Path) -> dict[str, Any]:
              and not any(t.status in {TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.RUNNING} for t in state.plan.steps)
              and not any(c.status == "PENDING" for c in state.confirmations)
              and not any(not c["verified"] for c in checks) and not missing and not screenshots
+             and screenshot_coverage["ready"]
              and bool(inputs) and all(e["copy_unchanged"] is True and
                                      (e["source_unchanged"] is True or e["source"] == ".") for e in inputs))
     return redact({
@@ -38,6 +41,7 @@ def review_workspace(workspace: Path) -> dict[str, Any]:
         "blocked_steps": [t.id for t in state.plan.steps if t.status == TaskStatus.BLOCKED],
         "evidence_count": len(evidence), "invalid_evidence": [c for c in checks if not c["verified"]],
         "screenshot_count": sum(e.type == "screenshot" for e in valid),
+        "screenshot_coverage": screenshot_coverage,
         "missing_required_evidence_steps": missing, "missing_required_screenshot_steps": screenshots,
         "inputs_unchanged": inputs, "ready": ready,
         "ready_scope": "execution and recorded evidence; assignment coverage and report layout require separate review",

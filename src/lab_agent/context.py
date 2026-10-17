@@ -8,7 +8,9 @@ from typing import Any
 
 from .credentials import redact, redact_text
 from .evidence import list_evidence, validate_evidence
+from .lab_passport import passport_summary
 from .models import TaskStatus
+from .screenshot_review import review_screenshots
 from .workspace import load_state
 
 
@@ -38,6 +40,9 @@ def workspace_context(workspace: Path, *, limit: int = 5, step_id: int | None = 
     selected_ids = {t.id for t in focus if t is not None}
     selected_evidence = [e for e in evidence if e.step_id in selected_ids]
     checks = validate_evidence(workspace) if verify else []
+    valid_ids = {c["id"] for c in checks if c["verified"]}
+    screenshot_coverage = review_screenshots(workspace, [e for e in evidence
+                                          if (e.id in valid_ids if verify else e.verified)])
     result: dict[str, Any] = {
         "workspace": str(workspace.resolve()), "assignment": state.assignment,
         "objective": _short(state.plan.objective, 500), "status": state.status,
@@ -51,6 +56,12 @@ def workspace_context(workspace: Path, *, limit: int = 5, step_id: int | None = 
         "pending_confirmations": [{"step": c.step_id, "reason": _short(c.reason)}
                                   for c in confirmations[:limit]],
         "confirmation_count": len(confirmations),
+        "lab_scope": passport_summary(workspace),
+        "screenshots": {"ready": screenshot_coverage["ready"], "checked_now": verify,
+                        "uncovered": [r["id"] for r in screenshot_coverage["requirements"] if not r["ready"]][:limit],
+                        "requirement_count": len(screenshot_coverage["requirements"]),
+                        "checklist": "metadata/screenshot_checklist.json",
+                        **({"error": screenshot_coverage["error"]} if "error" in screenshot_coverage else {})},
         "recent_errors": [{"step": e.get("step_id"), "kind": _short(e.get("kind", ""), 80),
                            "error": _short(e.get("error", ""), 500)} for e in state.errors[-min(limit, 3):]],
         "evidence": {"total": len(evidence), "focus_total": len(selected_evidence),

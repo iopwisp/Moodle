@@ -13,6 +13,7 @@ from .delivery import review_workspace
 from .integrations.registry import IntegrationRegistry
 from .runner import execute_workspace, plan_assignment
 from .scenarios import plan_scenario
+from .screenshot_review import prepare_screenshot_checklist
 from .workspace import load_state, write_json
 
 
@@ -44,6 +45,7 @@ def orchestrate_assignment(paths: list[Path], root: Path, *, workspace: Path | N
             "coverage_review": "pending: compare full original instructions, including figures and tables",
             "report_review": "pending: required format, filename, language, style and rendered pages",
         }))
+    prepare_screenshot_checklist(workspace)
     execution_config = config.model_copy(deep=True)
     if provider == "deterministic" or scenario is not None:
         execution_config.ai.provider = "deterministic"
@@ -53,6 +55,7 @@ def orchestrate_assignment(paths: list[Path], root: Path, *, workspace: Path | N
                           environment=environment, generate_report=generate_report)
     result = workspace_context(workspace)
     result["assignment_brief"] = "metadata/assignment_brief.json"
+    result["screenshot_checklist"] = "metadata/screenshot_checklist.json"
     result["completion_rule"] = "Check every original requirement and review the final report before declaring delivery complete"
     if execute:
         review = review_workspace(workspace)

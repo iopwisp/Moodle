@@ -29,6 +29,8 @@ class AIConfig(BaseModel):
     plan_attempts: int = Field(default=2, ge=1, le=10)
     fallback: Literal["deterministic", "none"] = "deterministic"
     recovery_advice: bool = True
+    ollama_think: bool | None = None  # None: model default; false: quicker Qwen3 browser actions
+    ollama_num_ctx: int | None = Field(default=None, ge=1024, le=262144)
 
 
 class ToolPolicy(BaseModel):

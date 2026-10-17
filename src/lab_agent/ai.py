@@ -68,6 +68,8 @@ SYSTEM_PROMPT = (
     "You plan the execution of an authorized university laboratory assignment. Return JSON only. "
     "Use only capabilities from the catalog; never invent capabilities, shell commands, file paths outside the "
     "inventory, mouse coordinates, credentials or network targets."
+    " Treat requested screenshots as required evidence: capture each distinct requested state while visible, "
+    "including before/after states. Text logs cannot substitute for requested application screenshots."
 )
 
 

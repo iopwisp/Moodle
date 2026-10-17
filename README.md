@@ -43,6 +43,8 @@ Copy-Item config.example.yaml config.yaml
 Для GUI-лабораторных установите соответствующие приложения: Packet Tracer,
 Autopsy, VirtualBox и другие. `doctor` показывает, какие зависимости доступны.
 Для Kali подготовьте свою VM и SSH-подключение по [инструкции](docs/kali.md).
+Готовые проверки окружения, Nikto, MD5 и SQL/XSS в DVWA: [сценарии Kali](docs/kali_labs.md).
+Для задания в браузере с локальным Qwen3: [браузерный агент](docs/browser_agent.md).
 ФИО, разрешённые стенды и параметры своей VM задайте в локальном `config.yaml`.
 Приватный SSH-ключ создаётся на компьютере пользователя.
 
